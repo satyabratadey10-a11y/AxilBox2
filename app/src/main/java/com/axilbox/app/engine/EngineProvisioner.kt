@@ -129,7 +129,8 @@ class EngineProvisioner(private val context: Context) {
 
         args.addAll(listOf(
             "-append", cmdlineBuilder.toString(),
-            "-nographic",
+            "-display", "none",
+            "-monitor", "none",
             "-serial", "stdio",
             "-no-reboot"
         ))

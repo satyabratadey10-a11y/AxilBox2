@@ -211,10 +211,10 @@ jobs:
             -m 512M \
             -kernel app/src/main/assets/kernel/Image \
             -append "console=ttyAMA0 earlycon=pl011,0x09000000 panic=-1 printk.devkmsg=on" \
-            -nographic \
+            -display none \
+            -monitor none \
             -serial stdio \
-            -no-reboot \
-            -display none > real-qemu-boot.log 2>&1 &
+            -no-reboot > real-qemu-boot.log 2>&1 &
 
           QEMU_PID=$!
           echo "Started QEMU process (PID $QEMU_PID). Collecting live serial console stream..."
