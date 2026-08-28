@@ -14,7 +14,12 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: InstanceViewModel by viewModels {
         val app = application as AxilBoxApplication
-        InstanceViewModel.Factory(app.repository, app.systemResourceProvider)
+        InstanceViewModel.Factory(
+            app.repository,
+            app.systemResourceProvider,
+            app.engineProvisioner,
+            app.qemuProcessRunner
+        )
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

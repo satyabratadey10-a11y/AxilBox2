@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.axilbox.app.data.InstanceRepository
+import com.axilbox.app.engine.EngineProvisioner
+import com.axilbox.app.engine.QemuProcessRunner
 import com.axilbox.app.model.InstanceStatus
 import com.axilbox.app.model.OsType
 import com.axilbox.app.model.VirtualInstance
@@ -22,7 +24,9 @@ import kotlinx.coroutines.launch
 
 class InstanceViewModel(
     private val repository: InstanceRepository,
-    private val systemResourceProvider: SystemResourceProvider
+    private val systemResourceProvider: SystemResourceProvider,
+    private val engineProvisioner: EngineProvisioner? = null,
+    private val qemuProcessRunner: QemuProcessRunner? = null
 ) : ViewModel() {
 
     private val _searchQuery = MutableStateFlow("")
@@ -58,11 +62,12 @@ class InstanceViewModel(
     private var bootJob: Job? = null
     private var uptimeJob: Job? = null
 
-    // Search and Modal Actions
+    // Search & Filtering
     fun onSearchQueryChanged(query: String) {
         _searchQuery.value = query
     }
 
+    // Modal Controls
     fun promptDeleteInstance(instance: VirtualInstance) {
         _selectedInstanceForDelete.value = instance
     }
@@ -83,20 +88,22 @@ class InstanceViewModel(
         _showAboutDialog.value = visible
     }
 
-    // Form Operations
-    fun initCreateForm() {
+    // Form Controls (Add/Edit)
+    fun initAddInstance() {
+        val defaultOs = OsType.AOSP_ARM64
         _formState.value = InstanceFormState(
-            osType = OsType.AOSP_ARM64,
-            vCpuCount = OsType.AOSP_ARM64.defaultVCpus,
-            ramMb = OsType.AOSP_ARM64.defaultRamMb,
-            storageGb = OsType.AOSP_ARM64.defaultStorageGb,
-            extraCmdline = OsType.AOSP_ARM64.defaultCmdline
+            osType = defaultOs,
+            vCpuCount = defaultOs.defaultVCpus,
+            ramMb = defaultOs.defaultRamMb,
+            storageGb = defaultOs.defaultStorageGb,
+            extraCmdline = defaultOs.defaultCmdline,
+            isEditMode = false
         )
     }
 
-    fun loadInstanceForEdit(id: Long) {
+    fun initEditInstance(instanceId: Long) {
         viewModelScope.launch {
-            val instance = repository.getInstanceById(id) ?: return@launch
+            val instance = repository.getInstanceById(instanceId) ?: return@launch
             _formState.value = InstanceFormState(
                 instanceId = instance.id,
                 name = instance.name,
@@ -219,7 +226,7 @@ class InstanceViewModel(
         }
     }
 
-    // Boot & Console Execution Stub
+    // Boot & Console Execution
     fun initBootScreen(instanceId: Long) {
         viewModelScope.launch {
             val instance = repository.getInstanceById(instanceId) ?: return@launch
@@ -245,7 +252,7 @@ class InstanceViewModel(
                     bootLogs = listOf(
                         BootLogSimulator.LogEntry(
                             0.0,
-                            "[AxilBox] Starting virtual instance '${instance.name}'..."
+                            "[AxilBox] Initializing execution pipeline for '${instance.name}'..."
                         )
                     ),
                     uptimeSeconds = 0,
@@ -254,27 +261,81 @@ class InstanceViewModel(
             }
             repository.updateStatus(instance.id, InstanceStatus.BOOTING)
 
-            val fullSequence = BootLogSimulator.generateBootSequence(instance)
-            for (entry in fullSequence) {
-                if (_bootUiState.value.bootStatus != InstanceStatus.BOOTING &&
-                    _bootUiState.value.bootStatus != InstanceStatus.RUNNING
-                ) {
-                    break
+            // Check if real native engine and kernel are provisioned
+            val hasRealEngine = engineProvisioner?.provisionEngineIfNeeded() == true && qemuProcessRunner != null
+
+            if (hasRealEngine) {
+                _bootUiState.update { current ->
+                    current.copy(
+                        bootLogs = current.bootLogs + BootLogSimulator.LogEntry(
+                            0.0,
+                            "[AxilBox Engine] Native QEMU aarch64 binary verified. Launching guest process...",
+                            BootLogSimulator.LogLevel.SUCCESS
+                        )
+                    )
                 }
-                delay(60) // simulated hardware bring-up delay
-                if (!_bootUiState.value.isLogPaused) {
+
+                val qemuArgs = engineProvisioner!!.buildQemuArgs(instance)
+                _bootUiState.update { it.copy(bootStatus = InstanceStatus.RUNNING) }
+                repository.markBooted(instance.id)
+                startUptimeCounter()
+
+                try {
+                    qemuProcessRunner!!.runQemu(qemuArgs).collect { rawLine ->
+                        val level = when {
+                            rawLine.contains("panic", ignoreCase = true) || rawLine.contains("error", ignoreCase = true) ->
+                                BootLogSimulator.LogLevel.ERROR
+                            rawLine.contains("warn", ignoreCase = true) ->
+                                BootLogSimulator.LogLevel.WARN
+                            rawLine.contains("Freeing unused kernel memory", ignoreCase = true) || rawLine.contains("SurfaceFlinger", ignoreCase = true) ->
+                                BootLogSimulator.LogLevel.SUCCESS
+                            else ->
+                                BootLogSimulator.LogLevel.INFO
+                        }
+                        if (!_bootUiState.value.isLogPaused) {
+                            _bootUiState.update { current ->
+                                current.copy(
+                                    bootLogs = current.bootLogs + BootLogSimulator.LogEntry(
+                                        timestamp = 0.0,
+                                        message = rawLine,
+                                        level = level
+                                    )
+                                )
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
                     _bootUiState.update { current ->
-                        current.copy(bootLogs = current.bootLogs + entry)
+                        current.copy(
+                            bootLogs = current.bootLogs + BootLogSimulator.LogEntry(
+                                0.0,
+                                "[AxilBox Engine] QEMU stream closed: ${e.message}",
+                                BootLogSimulator.LogLevel.WARN
+                            )
+                        )
                     }
                 }
+            } else {
+                // Fallback simulation when native engine binary is not packaged on host
+                val fullSequence = BootLogSimulator.generateBootSequence(instance)
+                for (entry in fullSequence) {
+                    if (_bootUiState.value.bootStatus != InstanceStatus.BOOTING &&
+                        _bootUiState.value.bootStatus != InstanceStatus.RUNNING
+                    ) {
+                        break
+                    }
+                    delay(60)
+                    if (!_bootUiState.value.isLogPaused) {
+                        _bootUiState.update { current ->
+                            current.copy(bootLogs = current.bootLogs + entry)
+                        }
+                    }
+                }
+
+                _bootUiState.update { it.copy(bootStatus = InstanceStatus.RUNNING) }
+                repository.markBooted(instance.id)
+                startUptimeCounter()
             }
-
-            // Mark running
-            _bootUiState.update { it.copy(bootStatus = InstanceStatus.RUNNING) }
-            repository.markBooted(instance.id)
-
-            // Start uptime counter
-            startUptimeCounter()
         }
     }
 
@@ -294,6 +355,8 @@ class InstanceViewModel(
         uptimeJob?.cancel()
 
         viewModelScope.launch {
+            qemuProcessRunner?.stop()
+
             _bootUiState.update {
                 it.copy(
                     isPoweringOff = true,
@@ -343,11 +406,18 @@ class InstanceViewModel(
 
     class Factory(
         private val repository: InstanceRepository,
-        private val systemResourceProvider: SystemResourceProvider
+        private val systemResourceProvider: SystemResourceProvider,
+        private val engineProvisioner: EngineProvisioner? = null,
+        private val qemuProcessRunner: QemuProcessRunner? = null
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return InstanceViewModel(repository, systemResourceProvider) as T
+            return InstanceViewModel(
+                repository,
+                systemResourceProvider,
+                engineProvisioner,
+                qemuProcessRunner
+            ) as T
         }
     }
 }

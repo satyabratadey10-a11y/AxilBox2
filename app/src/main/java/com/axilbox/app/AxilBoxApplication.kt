@@ -4,6 +4,8 @@ import android.app.Application
 import com.axilbox.app.data.AxilBoxDatabase
 import com.axilbox.app.data.InstanceRepository
 import com.axilbox.app.data.InstanceRepositoryImpl
+import com.axilbox.app.engine.EngineProvisioner
+import com.axilbox.app.engine.QemuProcessRunner
 import com.axilbox.app.util.SystemResourceProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,5 +25,13 @@ class AxilBoxApplication : Application() {
 
     val systemResourceProvider by lazy {
         SystemResourceProvider(this)
+    }
+
+    val engineProvisioner by lazy {
+        EngineProvisioner(this)
+    }
+
+    val qemuProcessRunner by lazy {
+        QemuProcessRunner(engineProvisioner)
     }
 }

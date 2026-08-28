@@ -1,4 +1,4 @@
-name: Android CI & Artifact Build
+name: Android CI & Guest Engine Pipeline
 
 on:
   push:
@@ -12,9 +12,143 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build & Test AxilBox
+  # =========================================================================
+  # JOB 1 — Kernel: Standard aarch64 cross-compile using kbuild directly
+  # =========================================================================
+  build-kernel:
+    name: "Job 1 — Build ARM64 Virt Linux Kernel"
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Install Toolchain & Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu \
+            bison \
+            flex \
+            libssl-dev \
+            bc \
+            libelf-dev \
+            kmod \
+            file
+
+      - name: Shallow Clone Linux Kernel (v6.6 LTS)
+        run: |
+          git clone --depth 1 --branch v6.6 https://github.com/torvalds/linux.git linux-src
+
+      - name: Configure Kernel for QEMU virt Machine (PLAN.md Stage 1)
+        working-directory: linux-src
+        run: |
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
+
+          # Serial & Earlycon Console
+          ./scripts/config --enable CONFIG_SERIAL_AMBA_PL011
+          ./scripts/config --enable CONFIG_SERIAL_AMBA_PL011_CONSOLE
+          ./scripts/config --enable CONFIG_SERIAL_EARLYCON
+          ./scripts/config --disable CONFIG_SERIAL_EARLYCON_ARM_SEMIHOST
+
+          # VirtIO Core & Transport
+          ./scripts/config --enable CONFIG_VIRTIO
+          ./scripts/config --enable CONFIG_VIRTIO_PCI
+          ./scripts/config --enable CONFIG_VIRTIO_PCI_MODERN
+          ./scripts/config --enable CONFIG_VIRTIO_MMIO
+          ./scripts/config --enable CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES
+
+          # VirtIO Storage
+          ./scripts/config --enable CONFIG_VIRTIO_BLK
+          ./scripts/config --enable CONFIG_EXT4_FS
+          ./scripts/config --enable CONFIG_EXT4_FS_POSIX_ACL
+          ./scripts/config --enable CONFIG_EXT4_FS_SECURITY
+
+          # Core Hardware & Addressing
+          ./scripts/config --enable CONFIG_ARM64_VA_BITS_48
+          ./scripts/config --enable CONFIG_ARM64_4K_PAGES
+          ./scripts/config --enable CONFIG_ARM64_GIC_V3
+          ./scripts/config --enable CONFIG_ARM64_GIC_V3_ITS
+          ./scripts/config --enable CONFIG_PCI
+          ./scripts/config --enable CONFIG_PCI_HOST_GENERIC
+          ./scripts/config --enable CONFIG_PCI_ECAM
+
+          # Logging & TTY
+          ./scripts/config --enable CONFIG_PRINTK
+          ./scripts/config --enable CONFIG_PRINTK_TIME
+          ./scripts/config --enable CONFIG_TTY
+
+          # Stage 1 Minimal: Disable virtio-gpu and virtio-input to keep scoped
+          ./scripts/config --disable CONFIG_DRM_VIRTIO_GPU
+          ./scripts/config --disable CONFIG_VIRTIO_INPUT
+          ./scripts/config --disable CONFIG_INPUT_EVDEV
+
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+
+      - name: Build ARM64 Kernel Image
+        working-directory: linux-src
+        run: |
+          make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image
+
+      - name: Verify Kernel Image Artifact
+        working-directory: linux-src
+        run: |
+          ls -lh arch/arm64/boot/Image
+          file arch/arm64/boot/Image
+
+      - name: Upload Kernel Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-kernel-image
+          path: linux-src/arch/arm64/boot/Image
+          if-no-files-found: error
+          retention-days: 7
+
+  # =========================================================================
+  # JOB 2 — QEMU + deps: Termux Bionic aarch64 Recipes Packaging
+  # =========================================================================
+  build-qemu:
+    name: "Job 2 — Build/Package QEMU aarch64 & Bionic Dependencies"
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf binutils-aarch64-linux-gnu file curl
+
+      - name: Provision QEMU & Bionic Shared Libs Bundle
+        run: |
+          bash tools/engine/package-termux-qemu.sh qemu-bundle
+
+      - name: Verify ELF Architecture & Linked Dependencies
+        run: |
+          file qemu-bundle/qemu-system-aarch64
+          aarch64-linux-gnu-readelf -h qemu-bundle/qemu-system-aarch64
+          echo "=== Bundle Contents ==="
+          ls -la qemu-bundle
+          ls -la qemu-bundle/lib
+
+      - name: Upload QEMU Bundle Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-aarch64-bundle
+          path: qemu-bundle/
+          if-no-files-found: error
+          retention-days: 7
+
+  # =========================================================================
+  # JOB 3 — App Build: Bundle Job 1 & 2 Artifacts + CI-Verified Real Boot
+  # =========================================================================
+  build-app:
+    name: "Job 3 — App Build & CI-Verified Boot Test"
     runs-on: ubuntu-latest
+    needs: [build-kernel, build-qemu]
     permissions:
       contents: read
 
@@ -36,11 +170,69 @@ jobs:
         with:
           gradle-version: 8.7
 
+      - name: Download Kernel Artifact (Job 1)
+        uses: actions/download-artifact@v4
+        with:
+          name: guest-kernel-image
+          path: app/src/main/assets/kernel/
+
+      - name: Download QEMU Bundle Artifact (Job 2)
+        uses: actions/download-artifact@v4
+        with:
+          name: qemu-aarch64-bundle
+          path: app/src/main/assets/engine/
+
+      - name: Verify Packaged Asset Structure
+        run: |
+          echo "=== App Raw Assets ==="
+          ls -lh app/src/main/assets/kernel/
+          ls -la app/src/main/assets/engine/
+          ls -la app/src/main/assets/engine/lib/ || true
+
       - name: Run Unit Tests
         run: gradle testDebugUnitTest --stacktrace
 
       - name: Build Debug APK
         run: gradle assembleDebug --stacktrace
+
+      - name: Install QEMU Runner for CI Verification
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-arm qemu-system-misc
+
+      - name: CI-Verified Real QEMU Kernel Boot Test
+        run: |
+          echo "=== Executing Real QEMU Process with Built ARM64 Kernel ==="
+          
+          qemu-system-aarch64 \
+            -M virt,gic-version=3 \
+            -cpu max \
+            -smp 2 \
+            -m 512M \
+            -kernel app/src/main/assets/kernel/Image \
+            -append "console=ttyAMA0 earlycon=pl011,0x09000000 panic=-1 printk.devkmsg=on" \
+            -nographic \
+            -serial stdio \
+            -no-reboot \
+            -display none > real-qemu-boot.log 2>&1 &
+
+          QEMU_PID=$!
+          echo "Started QEMU process (PID $QEMU_PID). Collecting live serial console stream..."
+          
+          # Allow kernel to boot and stream PL011 UART logs
+          sleep 20
+          kill -9 $QEMU_PID || true
+
+          echo "=== Actual QEMU Serial Console Log Output ==="
+          cat real-qemu-boot.log
+          echo "============================================="
+
+          # Assert genuine Linux kernel boot telemetry
+          echo "Validating genuine kernel boot telemetry..."
+          grep -q "Booting Linux on physical CPU" real-qemu-boot.log || (echo "FATAL: Booting Linux banner not found in serial log" && exit 1)
+          grep -q "Linux version" real-qemu-boot.log || (echo "FATAL: Linux version banner not found in serial log" && exit 1)
+          grep -q "pl011" real-qemu-boot.log || (echo "FATAL: pl011 earlycon log not found in serial log" && exit 1)
+          echo "✓ Real QEMU process execution and serial console output verified!"
 
       - name: Upload Test Reports
         if: always()
@@ -49,6 +241,14 @@ jobs:
           name: test-results
           path: app/build/reports/tests/testDebugUnitTest/
           retention-days: 7
+
+      - name: Upload Real Boot Log Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-verified-boot-log
+          path: real-qemu-boot.log
+          retention-days: 14
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4

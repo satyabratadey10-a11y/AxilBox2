@@ -35,3 +35,9 @@ As virtualization backends and streaming capabilities are introduced in subseque
 - **Authenticated Input Bridge:** The remote input forwarding channel (WebRTC DataChannel -> guest `uinput`) must be cryptographically authenticated with short-lived session tokens to prevent unauthorized keystroke or touch injection attacks.
 - **No Open Inbound Ports on Client:** Android client operates strictly as an outbound WebRTC peer connection initiator. No listening server sockets or ADB daemon ports are opened on the host device.
 - **Input Sanitization:** Remote MotionEvents forwarded to the cloud VM input bridge must be strictly bounded to guest screen coordinate dimensions to prevent integer overflow or out-of-bounds input event crashes.
+
+### 2.3. GPLv2 Binary Sandboxing & Open-Source Redistribution Compliance
+- **GPLv2 Source-Availability Mandate:** QEMU and the Linux kernel are governed by the GNU General Public License v2 (GPLv2). If AxilBox distributes bundled QEMU binaries (`qemu-system-aarch64`) or compiled kernel artifacts (`Image`) within or alongside the application package, Section 3 of GPLv2 mandates that complete corresponding source code must be made accessible under the same terms.
+- **Execution Sandboxing:** Bundled QEMU binaries are placed in app-private internal storage (`/data/user/0/com.axilbox.app/files/engine/`), made executable with user-only permissions (`0755`/`0700`), and executed exclusively as child processes under the application's unprivileged UID. No shared-memory or inter-process IPC channels are exposed to other applications on the device.
+- **Supply Chain Reproducibility:** All bundled binaries are provisioned through independent, verifiable CI workflows (direct Linux `kbuild` and official Termux cross-compilation recipes) without unverified third-party blobs.
+

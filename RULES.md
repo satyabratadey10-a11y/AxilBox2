@@ -21,6 +21,13 @@ This document defines the strict engineering rules, architectural bans, and oper
 - **Constraint:** Do not introduce dependencies on `android.system.virtualmachine` or `MANAGE_VIRTUAL_MACHINE` permissions.
 - **Enforcement:** The application must run cleanly as an unprivileged third-party APK on any standard Android 10+ (API 29+) device.
 
+### 1.4. QEMU & Linux Kernel GPLv2 Licensing & Source-Availability Obligations
+- **Constraint:** QEMU (`qemu-system-aarch64`), its underlying patches, and the Linux guest kernel (`Image`) are licensed under the GNU General Public License v2 (GPLv2). If this application is ever distributed with QEMU or pre-compiled guest kernel binaries bundled inside the APK or asset bundle, that distribution carries mandatory source-availability obligations under GPLv2 Section 3.
+- **Enforcement:**
+  - **Process Isolation Boundary:** The Android app code (Apache 2.0) communicates with QEMU across an unprivileged OS process/exec boundary (`execve`/`ProcessBuilder`) and never statically or dynamically links against GPLv2 QEMU object libraries.
+  - **Source Code Availability:** Any release or distribution of the binary APK bundled with QEMU or kernel binaries must include or accompany a clear written offer / accessible repository link providing the exact, complete corresponding machine-readable source code (including build scripts, kernel `.config`, termux-packages recipes, and patches) for at least three years.
+  - **Notice and License Preservation:** All original copyright notices, COPYING files, and GPLv2 headers must be preserved and surfaced in the application's About/Licenses dialogue.
+
 ---
 
 ## 2. Build, CI & Verification Discipline
