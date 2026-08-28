@@ -12,39 +12,39 @@ This document outlines the phased roadmap for AxilBox, tracking implementation p
   - [x] Zero-WebView architectural mandate enacted.
   - [x] Multi-phase technical roadmap defined.
 
-- [ ] **Phase 1 (CURRENT): Native Compose UI Shell & Room-Backed Instance Management**
-  - [ ] **Milestone 1.1: Data Architecture & Persistence Layer**
-    - [ ] Define `VirtualInstance` entity (id, name, osType, vCpuCount, ramMb, storageGb, imageUri, kernelUri, initrdUri, extraCmdline, status, createdAt, lastBootedAt).
-    - [ ] Create Room DAO (`InstanceDao`) with reactive Flow queries (`getAllInstances`, `getInstanceById`, `insert`, `update`, `delete`, `updateStatus`).
-    - [ ] Configure `AxilBoxDatabase` with Room migration strategies and pre-populated default templates (e.g. AOSP Minimal ARM64, Debian ARM64, Custom).
-    - [ ] Build clean repository layer (`InstanceRepository`) abstracting data access.
-  - [ ] **Milestone 1.2: Architecture, State & Navigation**
-    - [ ] Implement Jetpack Navigation 2.8+ type-safe navigation routes (`MainMenu`, `AddInstance`, `BootScreen/{instanceId}`).
-    - [ ] Implement `InstanceViewModel` with `StateFlow<InstanceUiState>` for unidirectional data flow (UDF).
-    - [ ] Integrate system resource query utility (`SystemResourceProvider`) to display physical host RAM and available storage.
-  - [ ] **Milestone 1.3: Main Menu Screen (Instance Dashboard)**
-    - [ ] Top App Bar with AxilBox branding, Host Resource Utilization badge, and quick actions.
-    - [ ] Virtual instance list displaying rich cards (Instance Name, OS badge, CPU/RAM/Storage specs, status indicator, last booted timestamp).
-    - [ ] Instance action controls per card (Start/Boot, Quick Settings, Edit, Delete with confirmation dialog).
-    - [ ] Interactive Empty State with visual guidance when zero instances exist.
-    - [ ] Floating Action Button (FAB) for fast instance creation.
-  - [ ] **Milestone 1.4: Add / Edit Instance Screen**
-    - [ ] Clean form layout with real-time field validation (unique name check, memory constraints).
-    - [ ] OS Profile presets (AOSP ARM64, Generic Linux, Custom Raw Image).
-    - [ ] Interactive sliders with haptic step feedback for vCPUs (1–4), RAM (512MB–4096MB), and Storage (4GB–64GB) with visual memory budget warnings.
-    - [ ] SAF-backed file picker stubs for selecting disk image, kernel, and initrd files.
-    - [ ] Collapsible advanced accordion for kernel command-line arguments and display orientation defaults.
-    - [ ] Instant save/cancel actions with database commit and seamless navigation back.
-  - [ ] **Milestone 1.5: Boot Screen (Phase 1 Simulated Telemetry & Execution Stub)**
-    - [ ] Dynamic Header with instance specs, running timer, and real-time state badge (STOPPED, BOOTING, RUNNING).
-    - [ ] Guest Display Container mimicking physical device aspect ratio (9:16 portrait / 16:9 landscape) with simulated active frame rasterizer.
-    - [ ] Live Monospace Boot Telemetry Console rendering sequential boot stages (DTS load, PL011 UART init, virtio-pci probe, ext4 mount, SurfaceFlinger stub).
-    - [ ] Interactive guest toolbar (Power Off / ACPI shutdown, Restart, Rotate Display, Capture Frame, Terminal Log Pause/Copy).
-  - [ ] **Milestone 1.6: Visual Design System, Dark Mode & Polish**
-    - [ ] Implement dark-mode design system with deep slate/zinc backgrounds, glassmorphism surface tokens, and neon status accents.
-    - [ ] Smooth screen transitions and card expansion animations using Compose animation physics.
-    - [ ] Comprehensive unit tests for Room DAOs, ViewModels, and UI state reducers.
-    - [ ] GitHub Actions CI workflow for spotless check, unit tests, and debug APK artifact generation.
+- [x] **Phase 1 (CURRENT): Native Compose UI Shell & Room-Backed Instance Management**
+  - [x] **Milestone 1.1: Data Architecture & Persistence Layer**
+    - [x] Define `VirtualInstance` entity (id, name, osType, vCpuCount, ramMb, storageGb, imageUri, kernelUri, initrdUri, extraCmdline, status, createdAt, lastBootedAt).
+    - [x] Create Room DAO (`InstanceDao`) with reactive Flow queries (`getAllInstances`, `getInstanceById`, `insert`, `update`, `delete`, `updateStatus`).
+    - [x] Configure `AxilBoxDatabase` with Room migration strategies and pre-populated default templates (e.g. AOSP Minimal ARM64, Debian ARM64, Custom).
+    - [x] Build clean repository layer (`InstanceRepository`) abstracting data access.
+  - [x] **Milestone 1.2: Architecture, State & Navigation**
+    - [x] Implement Jetpack Navigation 2.8+ type-safe navigation routes (`MainMenu`, `AddInstance`, `BootScreen/{instanceId}`).
+    - [x] Implement `InstanceViewModel` with `StateFlow<InstanceUiState>` for unidirectional data flow (UDF).
+    - [x] Integrate system resource query utility (`SystemResourceProvider`) to display physical host RAM and available storage.
+  - [x] **Milestone 1.3: Main Menu Screen (Instance Dashboard)**
+    - [x] Top App Bar with AxilBox branding, Host Resource Utilization badge, and quick actions.
+    - [x] Virtual instance list displaying rich cards (Instance Name, OS badge, CPU/RAM/Storage specs, status indicator, last booted timestamp).
+    - [x] Instance action controls per card (Start/Boot, Quick Settings, Edit, Delete with confirmation dialog).
+    - [x] Interactive Empty State with visual guidance when zero instances exist.
+    - [x] Floating Action Button (FAB) for fast instance creation.
+  - [x] **Milestone 1.4: Add / Edit Instance Screen**
+    - [x] Clean form layout with real-time field validation (unique name check, memory constraints).
+    - [x] OS Profile presets (AOSP ARM64, Generic Linux, Custom Raw Image).
+    - [x] Interactive sliders with haptic step feedback for vCPUs (1–4), RAM (512MB–4096MB), and Storage (4GB–64GB) with visual memory budget warnings.
+    - [x] SAF-backed file picker stubs for selecting disk image, kernel, and initrd files.
+    - [x] Collapsible advanced accordion for kernel command-line arguments and display orientation defaults.
+    - [x] Instant save/cancel actions with database commit and seamless navigation back.
+  - [x] **Milestone 1.5: Boot Screen (Phase 1 Simulated Telemetry & Execution Stub)**
+    - [x] Dynamic Header with instance specs, running timer, and real-time state badge (STOPPED, BOOTING, RUNNING).
+    - [x] Guest Display Container mimicking physical device aspect ratio (9:16 portrait / 16:9 landscape) with simulated active frame rasterizer.
+    - [x] Live Monospace Boot Telemetry Console rendering sequential boot stages (DTS load, PL011 UART init, virtio-pci probe, ext4 mount, SurfaceFlinger stub).
+    - [x] Interactive guest toolbar (Power Off / ACPI shutdown, Restart, Rotate Display, Capture Frame, Terminal Log Pause/Copy).
+  - [x] **Milestone 1.6: Visual Design System, Dark Mode & Polish**
+    - [x] Implement dark-mode design system with deep slate/zinc backgrounds, glassmorphism surface tokens, and neon status accents.
+    - [x] Smooth screen transitions and card expansion animations using Compose animation physics.
+    - [x] Comprehensive unit tests for Room DAOs, ViewModels, and UI state reducers.
+    - [x] GitHub Actions CI workflow for spotless check, unit tests, and debug APK artifact generation.
 
 ---
 
