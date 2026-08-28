@@ -89,6 +89,10 @@ class InstanceViewModel(
     }
 
     // Form Controls (Add/Edit)
+    fun initCreateForm() {
+        initAddInstance()
+    }
+
     fun initAddInstance() {
         val defaultOs = OsType.AOSP_ARM64
         _formState.value = InstanceFormState(
@@ -99,6 +103,10 @@ class InstanceViewModel(
             extraCmdline = defaultOs.defaultCmdline,
             isEditMode = false
         )
+    }
+
+    fun loadInstanceForEdit(instanceId: Long) {
+        initEditInstance(instanceId)
     }
 
     fun initEditInstance(instanceId: Long) {
@@ -296,7 +304,7 @@ class InstanceViewModel(
                             _bootUiState.update { current ->
                                 current.copy(
                                     bootLogs = current.bootLogs + BootLogSimulator.LogEntry(
-                                        timestamp = 0.0,
+                                        timestampSec = 0.0,
                                         message = rawLine,
                                         level = level
                                     )
