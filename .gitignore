@@ -1,0 +1,30 @@
+# Git Ignore for AxilBox Android Project
+
+# Gradle
+.gradle/
+build/
+app/build/
+*.apk
+*.aab
+
+# Android Studio & IntelliJ
+.idea/
+*.iml
+.cxx/
+local.properties
+captures/
+.externalNativeBuild/
+.navigation/
+
+# Kotlin
+.kotlin/
+*.hprof
+
+# OS Specific
+.DS_Store
+Thumbs.db
+
+# Secrets & Keys
+*.keystore
+*.jks
+google-services.json

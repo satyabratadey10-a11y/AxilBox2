@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">AxilBox</string>
+    <string name="app_tagline">Mobile Virtualization Manager</string>
+    <string name="title_main_menu">Virtual Instances</string>
+    <string name="title_add_instance">New Virtual Instance</string>
+    <string name="title_edit_instance">Edit Virtual Instance</string>
+    <string name="title_boot_screen">Virtual Console</string>
+    <string name="action_create_instance">Create Instance</string>
+    <string name="action_save_changes">Save Changes</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_start_boot">Start Instance</string>
+    <string name="action_power_off">Power Off</string>
+    <string name="action_restart">Reset</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_edit">Edit</string>
+    <string name="action_browse">Browse…</string>
+</resources>
