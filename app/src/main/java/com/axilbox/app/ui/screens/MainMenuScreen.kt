@@ -22,6 +22,8 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -48,10 +50,9 @@ import com.axilbox.app.ui.components.InstanceCard
 import com.axilbox.app.ui.components.ResourceSummaryCard
 import com.axilbox.app.ui.theme.AxilBoxTypography
 import com.axilbox.app.ui.theme.BackgroundDark
-import com.axilbox.app.ui.theme.BorderSubtle
-import com.axilbox.app.ui.theme.PrimaryCyan
-import com.axilbox.app.ui.theme.SurfacePrimary
-import com.axilbox.app.ui.theme.SurfaceSecondary
+import com.axilbox.app.ui.theme.BorderWhite
+import com.axilbox.app.ui.theme.ButtonTextBlack
+import com.axilbox.app.ui.theme.ButtonWhite
 import com.axilbox.app.ui.theme.TextMuted
 import com.axilbox.app.ui.theme.TextPrimary
 import com.axilbox.app.ui.theme.TextSecondary
@@ -76,7 +77,7 @@ fun MainMenuScreen(
                         Icon(
                             imageVector = Icons.Outlined.Terminal,
                             contentDescription = null,
-                            tint = PrimaryCyan,
+                            tint = Color.White,
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -91,7 +92,7 @@ fun MainMenuScreen(
                         Icon(
                             imageVector = Icons.Filled.Info,
                             contentDescription = "About",
-                            tint = TextSecondary
+                            tint = Color.White
                         )
                     }
                 },
@@ -104,10 +105,11 @@ fun MainMenuScreen(
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = onNavigateToAddInstance,
-                containerColor = PrimaryCyan,
-                contentColor = TextPrimary,
-                icon = { Icon(Icons.Filled.Add, contentDescription = "Add Instance") },
-                text = { Text("New Instance", style = AxilBoxTypography.labelLarge) }
+                containerColor = ButtonWhite,
+                contentColor = ButtonTextBlack,
+                shape = RoundedCornerShape(16.dp),
+                icon = { Icon(Icons.Filled.Add, contentDescription = "Add Instance", tint = ButtonTextBlack) },
+                text = { Text("New Instance", style = AxilBoxTypography.labelLarge.copy(color = ButtonTextBlack)) }
             )
         }
     ) { innerPadding ->
@@ -118,7 +120,7 @@ fun MainMenuScreen(
                     .padding(innerPadding),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator(color = PrimaryCyan)
+                CircularProgressIndicator(color = Color.White)
             }
         } else {
             LazyColumn(
@@ -147,26 +149,27 @@ fun MainMenuScreen(
                             placeholder = {
                                 Text(
                                     "Search instances...",
-                                    style = AxilBoxTypography.bodyMedium.copy(color = TextMuted)
+                                    style = AxilBoxTypography.bodyMedium.copy(color = TextSecondary)
                                 )
                             },
                             leadingIcon = {
                                 Icon(
                                     imageVector = Icons.Filled.Search,
                                     contentDescription = "Search",
-                                    tint = TextMuted
+                                    tint = Color.White
                                 )
                             },
                             singleLine = true,
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = SurfacePrimary,
-                                unfocusedContainerColor = SurfacePrimary,
-                                focusedBorderColor = PrimaryCyan,
-                                unfocusedBorderColor = BorderSubtle,
+                                focusedContainerColor = BackgroundDark,
+                                unfocusedContainerColor = BackgroundDark,
+                                focusedBorderColor = BorderWhite,
+                                unfocusedBorderColor = BorderWhite.copy(alpha = 0.7f),
                                 focusedTextColor = TextPrimary,
-                                unfocusedTextColor = TextPrimary
+                                unfocusedTextColor = TextPrimary,
+                                cursorColor = Color.White
                             ),
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(16.dp),
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -245,7 +248,7 @@ private fun EmptyInstanceState(
         Icon(
             imageVector = Icons.Outlined.Devices,
             contentDescription = null,
-            tint = PrimaryCyan.copy(alpha = 0.6f),
+            tint = Color.White,
             modifier = Modifier.size(56.dp)
         )
         Spacer(modifier = Modifier.height(16.dp))
@@ -259,20 +262,20 @@ private fun EmptyInstanceState(
                 "Try searching with a different instance name or OS profile."
             else
                 "Create an isolated Android or Linux virtual instance to test apps, explore kernels, or practice systems programming.",
-            style = AxilBoxTypography.bodyMedium.copy(color = TextMuted),
+            style = AxilBoxTypography.bodyMedium.copy(color = TextSecondary),
             textAlign = androidx.compose.ui.text.style.TextAlign.Center
         )
         if (!hasSearchQuery) {
             Spacer(modifier = Modifier.height(20.dp))
-            androidx.compose.material3.Button(
+            Button(
                 onClick = onCreateClick,
-                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                    containerColor = PrimaryCyan,
-                    contentColor = TextPrimary
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = ButtonWhite,
+                    contentColor = ButtonTextBlack
                 ),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(16.dp)
             ) {
-                Text("Create First Instance", style = AxilBoxTypography.labelLarge)
+                Text("Create First Instance", style = AxilBoxTypography.labelLarge.copy(color = ButtonTextBlack))
             }
         }
     }

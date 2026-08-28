@@ -66,21 +66,8 @@ import com.axilbox.app.model.InstanceStatus
 import com.axilbox.app.ui.components.StatusBadge
 import com.axilbox.app.ui.theme.AxilBoxTypography
 import com.axilbox.app.ui.theme.BackgroundDark
-import com.axilbox.app.ui.theme.BorderFocus
-import com.axilbox.app.ui.theme.BorderSubtle
+import com.axilbox.app.ui.theme.BorderWhite
 import com.axilbox.app.ui.theme.MonospaceCodeStyle
-import com.axilbox.app.ui.theme.PrimaryCyan
-import com.axilbox.app.ui.theme.StatusBootingColor
-import com.axilbox.app.ui.theme.StatusErrorColor
-import com.axilbox.app.ui.theme.StatusRunningColor
-import com.axilbox.app.ui.theme.SurfaceElevated
-import com.axilbox.app.ui.theme.SurfacePrimary
-import com.axilbox.app.ui.theme.SurfaceSecondary
-import com.axilbox.app.ui.theme.TerminalBackground
-import com.axilbox.app.ui.theme.TerminalTextErr
-import com.axilbox.app.ui.theme.TerminalTextInfo
-import com.axilbox.app.ui.theme.TerminalTextSuccess
-import com.axilbox.app.ui.theme.TerminalTextWarn
 import com.axilbox.app.ui.theme.TextMuted
 import com.axilbox.app.ui.theme.TextPrimary
 import com.axilbox.app.ui.theme.TextSecondary
@@ -127,12 +114,12 @@ fun BootScreen(
                                     bootState.uptimeSeconds / 60,
                                     bootState.uptimeSeconds % 60
                                 ),
-                                style = AxilBoxTypography.labelSmall.copy(color = PrimaryCyan)
+                                style = AxilBoxTypography.labelSmall.copy(color = TextPrimary)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "• ${instance?.vCpuCount ?: 2} vCPUs / ${instance?.ramMb ?: 2048}MB",
-                                style = AxilBoxTypography.labelSmall.copy(color = TextMuted)
+                                style = AxilBoxTypography.labelSmall.copy(color = TextSecondary)
                             )
                         }
                     }
@@ -142,7 +129,7 @@ fun BootScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = TextPrimary
+                            tint = Color.White
                         )
                     }
                 },
@@ -156,7 +143,7 @@ fun BootScreen(
                         Icon(
                             imageVector = Icons.Filled.Refresh,
                             contentDescription = "Reset",
-                            tint = TextSecondary
+                            tint = Color.White
                         )
                     }
                     IconButton(
@@ -171,7 +158,7 @@ fun BootScreen(
                         Icon(
                             imageVector = Icons.Filled.PowerSettingsNew,
                             contentDescription = "Power",
-                            tint = if (bootState.bootStatus == InstanceStatus.RUNNING) StatusErrorColor else PrimaryCyan
+                            tint = Color.White
                         )
                     }
                 },
@@ -213,8 +200,8 @@ fun BootScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SurfacePrimary, RoundedCornerShape(10.dp))
-                    .border(1.dp, BorderSubtle, RoundedCornerShape(10.dp))
+                    .background(BackgroundDark, RoundedCornerShape(16.dp))
+                    .border(1.5.dp, BorderWhite, RoundedCornerShape(16.dp))
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -222,7 +209,7 @@ fun BootScreen(
                         Icon(
                             imageVector = Icons.Filled.ScreenRotation,
                             contentDescription = "Rotate",
-                            tint = PrimaryCyan,
+                            tint = Color.White,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -232,7 +219,7 @@ fun BootScreen(
                         Icon(
                             imageVector = Icons.Filled.Keyboard,
                             contentDescription = "Keyboard",
-                            tint = TextSecondary,
+                            tint = Color.White,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -242,7 +229,7 @@ fun BootScreen(
                         Icon(
                             imageVector = Icons.Filled.CameraAlt,
                             contentDescription = "Screenshot",
-                            tint = TextSecondary,
+                            tint = Color.White,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -253,7 +240,7 @@ fun BootScreen(
                         Icon(
                             imageVector = if (bootState.isLogPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
                             contentDescription = if (bootState.isLogPaused) "Resume Logs" else "Pause Logs",
-                            tint = if (bootState.isLogPaused) StatusBootingColor else TextSecondary,
+                            tint = Color.White,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -266,7 +253,7 @@ fun BootScreen(
                         Icon(
                             imageVector = Icons.Filled.ContentCopy,
                             contentDescription = "Copy Logs",
-                            tint = TextSecondary,
+                            tint = Color.White,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -274,7 +261,7 @@ fun BootScreen(
                         Icon(
                             imageVector = Icons.Filled.DeleteSweep,
                             contentDescription = "Clear Logs",
-                            tint = TextSecondary,
+                            tint = Color.White,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -282,7 +269,7 @@ fun BootScreen(
                         Icon(
                             imageVector = Icons.Filled.Terminal,
                             contentDescription = "Toggle Terminal",
-                            tint = if (bootState.isTerminalExpanded) PrimaryCyan else TextMuted,
+                            tint = Color.White,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -301,8 +288,8 @@ fun BootScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(TerminalBackground, RoundedCornerShape(12.dp))
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(12.dp))
+                        .background(BackgroundDark, RoundedCornerShape(16.dp))
+                        .border(1.5.dp, BorderWhite, RoundedCornerShape(16.dp))
                         .padding(10.dp)
                 ) {
                     Row(
@@ -312,11 +299,11 @@ fun BootScreen(
                     ) {
                         Text(
                             text = "UART PL011 Serial Console (/dev/ttyAMA0)",
-                            style = AxilBoxTypography.labelSmall.copy(color = PrimaryCyan)
+                            style = AxilBoxTypography.labelSmall.copy(color = TextPrimary)
                         )
                         Text(
                             text = "${bootState.bootLogs.size} lines",
-                            style = AxilBoxTypography.labelSmall.copy(color = TextMuted)
+                            style = AxilBoxTypography.labelSmall.copy(color = TextSecondary)
                         )
                     }
 
@@ -327,15 +314,9 @@ fun BootScreen(
                         modifier = Modifier.fillMaxSize()
                     ) {
                         items(bootState.bootLogs) { logEntry ->
-                            val color = when (logEntry.level) {
-                                BootLogSimulator.LogLevel.INFO -> TerminalTextInfo
-                                BootLogSimulator.LogLevel.WARN -> TerminalTextWarn
-                                BootLogSimulator.LogLevel.ERROR -> TerminalTextErr
-                                BootLogSimulator.LogLevel.SUCCESS -> TerminalTextSuccess
-                            }
                             Text(
                                 text = logEntry.message,
-                                style = MonospaceCodeStyle.copy(color = color, fontSize = 11.sp),
+                                style = MonospaceCodeStyle.copy(color = TextPrimary, fontSize = 11.sp),
                                 modifier = Modifier.padding(vertical = 1.dp)
                             )
                         }
@@ -368,8 +349,8 @@ private fun VirtualDisplayContainer(
         modifier = Modifier
             .aspectRatio(aspectRatio, matchHeightConstraintsFirst = true)
             .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF070B12))
-            .border(2.dp, if (bootStatus == InstanceStatus.RUNNING) BorderFocus else BorderSubtle, RoundedCornerShape(16.dp))
+            .background(BackgroundDark)
+            .border(1.5.dp, BorderWhite, RoundedCornerShape(16.dp))
             .padding(8.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -379,34 +360,34 @@ private fun VirtualDisplayContainer(
                     Icon(
                         imageVector = Icons.Filled.PowerSettingsNew,
                         contentDescription = null,
-                        tint = TextMuted,
+                        tint = TextSecondary,
                         modifier = Modifier.size(40.dp)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "Guest VM Inactive",
-                        style = AxilBoxTypography.titleSmall.copy(color = TextMuted)
+                        style = AxilBoxTypography.titleSmall.copy(color = TextPrimary)
                     )
                     Text(
                         text = "Tap Power button to start",
-                        style = AxilBoxTypography.bodySmall.copy(color = TextMuted)
+                        style = AxilBoxTypography.bodySmall.copy(color = TextSecondary)
                     )
                 }
             }
             InstanceStatus.BOOTING -> {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(
-                        color = StatusBootingColor,
+                        color = Color.White,
                         modifier = Modifier.size(36.dp)
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
                         text = "Booting ARM64 virt kernel...",
-                        style = AxilBoxTypography.titleSmall.copy(color = StatusBootingColor)
+                        style = AxilBoxTypography.titleSmall.copy(color = TextPrimary)
                     )
                     Text(
                         text = "Mounting virtio-blk and DRM compositor",
-                        style = AxilBoxTypography.bodySmall.copy(color = TextMuted)
+                        style = AxilBoxTypography.bodySmall.copy(color = TextSecondary)
                     )
                 }
             }
@@ -419,12 +400,12 @@ private fun VirtualDisplayContainer(
                         modifier = Modifier
                             .size(10.dp)
                             .alpha(scanAlpha)
-                            .background(StatusRunningColor, CircleShape)
+                            .background(Color.White, CircleShape)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "VIRTIO-GPU DISPLAY ACTIVE",
-                        style = AxilBoxTypography.labelMedium.copy(color = PrimaryCyan, fontSize = 12.sp)
+                        style = AxilBoxTypography.labelMedium.copy(color = TextPrimary, fontSize = 12.sp)
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
@@ -438,7 +419,7 @@ private fun VirtualDisplayContainer(
                     )
                     Text(
                         text = "Native QEMU JNI pipeline connects in Phase 2\nCloud WebRTC engine connects in Phase 3",
-                        style = AxilBoxTypography.labelSmall.copy(color = TextMuted),
+                        style = AxilBoxTypography.labelSmall.copy(color = TextSecondary),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                 }

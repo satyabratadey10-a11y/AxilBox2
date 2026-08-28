@@ -8,44 +8,38 @@ This document defines the complete visual design language, interface architectur
 
 AxilBox adopts an engineering-first, modern dark-mode aesthetic inspired by precision developer environments (e.g., modern IDEs, hypervisor consoles, and low-latency streaming dashboards). The visual system prioritizes clarity, information density, high contrast, crisp borders, and fluid feedback.
 
-### 1.1. Color Palette (Dark Mode First)
+### 1.1. Color Palette (Pure Black & Solid White Monochrome)
 
 | Token Name | Hex Code | Semantic Role |
 |---|---|---|
-| `Background` | `#0B0F17` | Deep space canvas background |
-| `SurfacePrimary` | `#131B2E` | Card, container, and dialog background |
-| `SurfaceSecondary` | `#1E293B` | Interactive input fields, secondary cards, inactive chips |
-| `SurfaceElevated` | `#26354D` | Modals, popup menus, elevated action sheets |
-| `BorderSubtle` | `#2D3B54` | 1dp crisp structural dividers and card strokes |
-| `BorderFocus` | `#38BDF8` | Active input outline and selected instance border |
-| `Primary` | `#0284C7` | Primary buttons, active slider tracks, key icons |
-| `PrimaryHover` | `#38BDF8` | Primary hover and ripple highlight |
-| `PrimaryGlow` | `#0284C740` | Subtle glow behind active boot and action buttons |
-| `TextPrimary` | `#F8FAFC` | Main headings, instance titles, primary labels |
-| `TextSecondary` | `#94A3B8` | Subtitles, helper text, inactive labels, specs |
-| `TextMuted` | `#64748B` | Timestamp tags, placeholder text, hints |
-| `StatusStopped` | `#64748B` | Inactive / Stopped state badge and indicator |
-| `StatusBooting` | `#F59E0B` | Booting / Initializing state (amber) with pulse |
-| `StatusRunning` | `#10B981` | Active / Running state (emerald green) |
-| `StatusError` | `#EF4444` | Crash, error, invalid input badge (crimson red) |
-| `TerminalBg` | `#050811` | Monospace live log console background |
-| `TerminalText` | `#38BDF8` | Monospace log standard output stream |
-| `TerminalWarn` | `#FBBF24` | Monospace log warning level |
-| `TerminalErr` | `#F87171` | Monospace log error/panic level |
+| `Background` | `#000000` | Pure black canvas background everywhere |
+| `SurfacePrimary` | `#000000` | Card, container, and dialog background |
+| `SurfaceSecondary` | `#000000` | Interactive input fields, secondary containers |
+| `BorderWhite` | `#FFFFFF` | 1.5–2dp crisp white structural outline and card borders |
+| `ButtonWhite` | `#FFFFFF` | Solid white fill for primary buttons, FAB, save/create actions |
+| `ButtonTextBlack` | `#000000` | Solid black text and icon inside white buttons |
+| `TextPrimary` | `#FFFFFF` | Main headings, instance titles, primary labels, values |
+| `TextSecondary` | `#CCCCCC` | Subtitles, helper text, inactive labels, specs |
+| `TextMuted` | `#888888` | Timestamp tags, placeholder text, hints |
+| `StatusBadge` | `#000000` / `#FFFFFF` | Black fill with 1.5dp white outline and white text (no color-coding) |
+| `ChipSelected` | `#FFFFFF` | Solid white fill with black text |
+| `ChipUnselected` | `#000000` | Black fill with 1.5dp white outline and white text |
+| `TerminalBg` | `#000000` | Pure black monospace live log console background |
+| `TerminalText` | `#FFFFFF` | Monospace log stream output |
 
 ### 1.2. Typography Hierarchy
 
 The typography system uses Android system sans-serif (`Roboto` / `Inter` fallback) for interface elements and system monospace (`Roboto Mono` / `Courier` fallback) for telemetry, RAM/CPU allocation metrics, and boot logs.
 
-- **Display Large:** `28sp`, Bold, LineHeight `34sp` — Top level screen titles.
-- **Title Medium:** `18sp`, SemiBold, LineHeight `24sp` — Instance card titles, modal headings.
-- **Body Regular:** `14sp`, Normal, LineHeight `20sp` — Descriptive text, form labels.
-- **Body Small:** `12sp`, Normal, LineHeight `16sp` — Secondary hints, status labels.
-- **Monospace Code:** `12sp`, SemiBold / Normal, LineHeight `16sp` — Memory sizes (e.g. `2048 MB`), vCPU counts, boot log stream.
+- **Display Large:** `28sp`, Bold, LineHeight `34sp` — Top level screen titles (`#FFFFFF`).
+- **Title Medium:** `18sp`, SemiBold, LineHeight `24sp` — Instance card titles, modal headings (`#FFFFFF`).
+- **Body Regular:** `14sp`, Normal, LineHeight `20sp` — Descriptive text, form labels (`#FFFFFF`).
+- **Body Small:** `12sp`, Normal, LineHeight `16sp` — Secondary hints, status labels (`#CCCCCC`).
+- **Monospace Code:** `12sp`, SemiBold / Normal, LineHeight `16sp` — Memory sizes (e.g. `2048 MB`), vCPU counts, boot log stream (`#FFFFFF`).
 
 ### 1.3. Iconography & Visual Assets
 - Icon library: Material Symbols / Lucide Icons via Compose standard icons.
-- Style: Consistent 2.0dp stroke outline style, no heavy solid fills unless indicating active selection.
+- Style: Consistent 2.0dp stroke outline style, monochrome white icons (black when inside solid white buttons). No emoji, no color icons.
 - Sizing Tokens:
   - `IconSmall`: `16dp` — In-chip status icons, small badge markers.
   - `IconMedium`: `20dp` — Button leading icons, action controls.
@@ -53,11 +47,10 @@ The typography system uses Android system sans-serif (`Roboto` / `Inter` fallbac
   - `IconHero`: `48dp` — Empty state banners and boot logo containers.
 
 ### 1.4. Corner Radii & Elevation
-- `RadiusSmall`: `8dp` — Chips, badges, progress bar pills.
-- `RadiusMedium`: `12dp` — Action buttons, text input fields, dropdown menus.
-- `RadiusLarge`: `16dp` — Instance cards, resource summary dashboard.
-- `RadiusXLarge`: `24dp` — Bottom sheets, dialog modals.
-- Surface Elevation: 0dp elevation with 1dp `#2D3B54` border stroke replaces heavy drop shadows to preserve contrast on mobile OLED screens.
+- `RadiusSmall`: `8dp` — Chips, badges.
+- `RadiusMedium`: `12dp` — Text input fields, dropdown menus.
+- `RadiusLarge`: `16dp` — Cards, action buttons, dialog modals, resource summary panel.
+- Surface Elevation: 0dp elevation with 1.5dp `#FFFFFF` border stroke on pure black `#000000` surfaces.
 
 ### 1.5. Motion & Physics
 - Screen transition duration: `220ms` with `FastOutSlowInEasing`.

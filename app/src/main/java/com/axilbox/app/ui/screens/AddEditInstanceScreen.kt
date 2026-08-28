@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -51,17 +52,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.axilbox.app.model.OsType
 import com.axilbox.app.ui.components.HardwareSpecSlider
 import com.axilbox.app.ui.theme.AxilBoxTypography
 import com.axilbox.app.ui.theme.BackgroundDark
-import com.axilbox.app.ui.theme.BorderSubtle
-import com.axilbox.app.ui.theme.PrimaryCyan
-import com.axilbox.app.ui.theme.StatusErrorColor
-import com.axilbox.app.ui.theme.SurfacePrimary
-import com.axilbox.app.ui.theme.SurfaceSecondary
+import com.axilbox.app.ui.theme.BorderWhite
+import com.axilbox.app.ui.theme.ButtonTextBlack
+import com.axilbox.app.ui.theme.ButtonWhite
 import com.axilbox.app.ui.theme.TextMuted
 import com.axilbox.app.ui.theme.TextPrimary
 import com.axilbox.app.ui.theme.TextSecondary
@@ -111,7 +111,7 @@ fun AddEditInstanceScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = TextPrimary
+                            tint = Color.White
                         )
                     }
                 },
@@ -132,32 +132,35 @@ fun AddEditInstanceScreen(
             ) {
                 OutlinedButton(
                     onClick = onNavigateBack,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.5.dp, BorderWhite),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Cancel", style = AxilBoxTypography.labelLarge.copy(color = TextSecondary))
+                    Text("Cancel", style = AxilBoxTypography.labelLarge.copy(color = TextPrimary))
                 }
 
                 Button(
                     onClick = { viewModel.saveInstance(onSaveSuccess) },
                     enabled = formState.isFormValid,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = PrimaryCyan,
-                        contentColor = TextPrimary
+                        containerColor = ButtonWhite,
+                        contentColor = ButtonTextBlack,
+                        disabledContainerColor = Color(0xFF333333),
+                        disabledContentColor = Color(0xFF777777)
                     ),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.weight(1f)
                 ) {
                     if (formState.isSaving) {
                         CircularProgressIndicator(
-                            color = TextPrimary,
+                            color = ButtonTextBlack,
                             modifier = Modifier.size(18.dp),
                             strokeWidth = 2.dp
                         )
                     } else {
                         Text(
                             text = if (formState.isEditMode) "Save Changes" else "Create Instance",
-                            style = AxilBoxTypography.labelLarge
+                            style = AxilBoxTypography.labelLarge.copy(color = ButtonTextBlack)
                         )
                     }
                 }
@@ -176,7 +179,7 @@ fun AddEditInstanceScreen(
             // Section 1: Instance Identity
             Text(
                 text = "Instance Identity",
-                style = AxilBoxTypography.titleSmall.copy(color = PrimaryCyan)
+                style = AxilBoxTypography.titleSmall.copy(color = TextPrimary)
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -184,28 +187,29 @@ fun AddEditInstanceScreen(
             OutlinedTextField(
                 value = formState.name,
                 onValueChange = { viewModel.onFormNameChanged(it) },
-                label = { Text("Instance Name", style = AxilBoxTypography.bodyMedium) },
+                label = { Text("Instance Name", style = AxilBoxTypography.bodyMedium.copy(color = TextSecondary)) },
                 placeholder = { Text("e.g. AOSP-14-ARM64", style = AxilBoxTypography.bodyMedium.copy(color = TextMuted)) },
                 isError = formState.nameError != null,
                 supportingText = formState.nameError?.let {
-                    { Text(it, style = AxilBoxTypography.bodySmall.copy(color = StatusErrorColor)) }
+                    { Text(it, style = AxilBoxTypography.bodySmall.copy(color = TextSecondary)) }
                 },
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = SurfacePrimary,
-                    unfocusedContainerColor = SurfacePrimary,
-                    focusedBorderColor = PrimaryCyan,
-                    unfocusedBorderColor = BorderSubtle,
+                    focusedContainerColor = BackgroundDark,
+                    unfocusedContainerColor = BackgroundDark,
+                    focusedBorderColor = BorderWhite,
+                    unfocusedBorderColor = BorderWhite.copy(alpha = 0.7f),
                     focusedTextColor = TextPrimary,
-                    unfocusedTextColor = TextPrimary
+                    unfocusedTextColor = TextPrimary,
+                    cursorColor = Color.White
                 ),
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth()
             )
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // OS Profile Selection
+            // OS Profile Selection (White outline unselected / White fill selected)
             Text(
                 text = "OS Profile Preset",
                 style = AxilBoxTypography.bodyMedium.copy(color = TextSecondary)
@@ -230,14 +234,24 @@ fun AddEditInstanceScreen(
                                     OsType.LINUX_GENERIC -> "Linux"
                                     OsType.CUSTOM_RAW -> "Custom"
                                 },
-                                style = AxilBoxTypography.labelSmall
+                                style = AxilBoxTypography.labelSmall.copy(
+                                    color = if (isSelected) ButtonTextBlack else TextPrimary
+                                )
                             )
                         },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = PrimaryCyan,
-                            selectedLabelColor = TextPrimary,
-                            containerColor = SurfaceSecondary,
-                            labelColor = TextSecondary
+                            selectedContainerColor = ButtonWhite,
+                            selectedLabelColor = ButtonTextBlack,
+                            containerColor = BackgroundDark,
+                            labelColor = TextPrimary
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = isSelected,
+                            borderColor = BorderWhite,
+                            selectedBorderColor = BorderWhite,
+                            borderWidth = 1.5.dp,
+                            selectedBorderWidth = 1.5.dp
                         ),
                         shape = RoundedCornerShape(8.dp)
                     )
@@ -249,7 +263,7 @@ fun AddEditInstanceScreen(
             // Section 2: Virtual Hardware Allocation
             Text(
                 text = "Hardware Allocation",
-                style = AxilBoxTypography.titleSmall.copy(color = PrimaryCyan)
+                style = AxilBoxTypography.titleSmall.copy(color = TextPrimary)
             )
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -295,7 +309,7 @@ fun AddEditInstanceScreen(
             // Section 3: Storage & Kernel Images (SAF)
             Text(
                 text = "Guest Images & Kernels (SAF Scoped)",
-                style = AxilBoxTypography.titleSmall.copy(color = PrimaryCyan)
+                style = AxilBoxTypography.titleSmall.copy(color = TextPrimary)
             )
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -340,7 +354,7 @@ fun AddEditInstanceScreen(
                 Icon(
                     imageVector = if (isAdvancedExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                     contentDescription = null,
-                    tint = TextSecondary
+                    tint = Color.White
                 )
             }
 
@@ -348,23 +362,24 @@ fun AddEditInstanceScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(SurfacePrimary, RoundedCornerShape(12.dp))
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(12.dp))
+                        .background(BackgroundDark, RoundedCornerShape(16.dp))
+                        .border(1.5.dp, BorderWhite, RoundedCornerShape(16.dp))
                         .padding(16.dp)
                 ) {
                     OutlinedTextField(
                         value = formState.extraCmdline,
                         onValueChange = { viewModel.onFormExtraCmdlineChanged(it) },
-                        label = { Text("Kernel Command Line", style = AxilBoxTypography.bodySmall) },
+                        label = { Text("Kernel Command Line", style = AxilBoxTypography.bodySmall.copy(color = TextSecondary)) },
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = SurfaceSecondary,
-                            unfocusedContainerColor = SurfaceSecondary,
-                            focusedBorderColor = PrimaryCyan,
-                            unfocusedBorderColor = BorderSubtle,
+                            focusedContainerColor = BackgroundDark,
+                            unfocusedContainerColor = BackgroundDark,
+                            focusedBorderColor = BorderWhite,
+                            unfocusedBorderColor = BorderWhite.copy(alpha = 0.7f),
                             focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary
+                            unfocusedTextColor = TextPrimary,
+                            cursorColor = Color.White
                         ),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
 
@@ -380,15 +395,61 @@ fun AddEditInstanceScreen(
                             style = AxilBoxTypography.bodyMedium.copy(color = TextPrimary)
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            val isPortrait = formState.displayOrientation == "PORTRAIT"
                             FilterChip(
-                                selected = formState.displayOrientation == "PORTRAIT",
+                                selected = isPortrait,
                                 onClick = { viewModel.onFormOrientationChanged("PORTRAIT") },
-                                label = { Text("Portrait (9:16)", style = AxilBoxTypography.labelSmall) }
+                                label = {
+                                    Text(
+                                        text = "Portrait (9:16)",
+                                        style = AxilBoxTypography.labelSmall.copy(
+                                            color = if (isPortrait) ButtonTextBlack else TextPrimary
+                                        )
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = ButtonWhite,
+                                    selectedLabelColor = ButtonTextBlack,
+                                    containerColor = BackgroundDark,
+                                    labelColor = TextPrimary
+                                ),
+                                border = FilterChipDefaults.filterChipBorder(
+                                    enabled = true,
+                                    selected = isPortrait,
+                                    borderColor = BorderWhite,
+                                    selectedBorderColor = BorderWhite,
+                                    borderWidth = 1.5.dp,
+                                    selectedBorderWidth = 1.5.dp
+                                ),
+                                shape = RoundedCornerShape(8.dp)
                             )
+                            val isLandscape = formState.displayOrientation == "LANDSCAPE"
                             FilterChip(
-                                selected = formState.displayOrientation == "LANDSCAPE",
+                                selected = isLandscape,
                                 onClick = { viewModel.onFormOrientationChanged("LANDSCAPE") },
-                                label = { Text("Landscape (16:9)", style = AxilBoxTypography.labelSmall) }
+                                label = {
+                                    Text(
+                                        text = "Landscape (16:9)",
+                                        style = AxilBoxTypography.labelSmall.copy(
+                                            color = if (isLandscape) ButtonTextBlack else TextPrimary
+                                        )
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = ButtonWhite,
+                                    selectedLabelColor = ButtonTextBlack,
+                                    containerColor = BackgroundDark,
+                                    labelColor = TextPrimary
+                                ),
+                                border = FilterChipDefaults.filterChipBorder(
+                                    enabled = true,
+                                    selected = isLandscape,
+                                    borderColor = BorderWhite,
+                                    selectedBorderColor = BorderWhite,
+                                    borderWidth = 1.5.dp,
+                                    selectedBorderWidth = 1.5.dp
+                                ),
+                                shape = RoundedCornerShape(8.dp)
                             )
                         }
                     }
@@ -407,15 +468,17 @@ fun AddEditInstanceScreen(
                             )
                             Text(
                                 text = "Stream early boot console logs to app telemetry",
-                                style = AxilBoxTypography.bodySmall.copy(color = TextMuted)
+                                style = AxilBoxTypography.bodySmall.copy(color = TextSecondary)
                             )
                         }
                         Switch(
                             checked = formState.serialConsoleLogging,
                             onCheckedChange = { viewModel.onFormSerialLoggingChanged(it) },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = PrimaryCyan,
-                                checkedTrackColor = SurfaceSecondary
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Color(0xFF444444),
+                                uncheckedThumbColor = Color(0xFF888888),
+                                uncheckedTrackColor = Color(0xFF111111)
                             )
                         )
                     }
@@ -443,8 +506,8 @@ private fun FilePickerField(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SurfacePrimary, RoundedCornerShape(10.dp))
-                .border(1.dp, BorderSubtle, RoundedCornerShape(10.dp))
+                .background(BackgroundDark, RoundedCornerShape(16.dp))
+                .border(1.5.dp, BorderWhite, RoundedCornerShape(16.dp))
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             Text(
@@ -458,17 +521,18 @@ private fun FilePickerField(
             Spacer(modifier = Modifier.width(8.dp))
             OutlinedButton(
                 onClick = onBrowseClick,
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, BorderWhite),
                 modifier = Modifier.height(36.dp)
             ) {
                 Icon(
                     imageVector = Icons.Outlined.FolderOpen,
                     contentDescription = "Browse",
-                    tint = PrimaryCyan,
+                    tint = Color.White,
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Browse", style = AxilBoxTypography.labelSmall.copy(color = PrimaryCyan))
+                Text("Browse", style = AxilBoxTypography.labelSmall.copy(color = TextPrimary))
             }
         }
     }

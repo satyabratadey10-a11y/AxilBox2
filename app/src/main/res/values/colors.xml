@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="background">#0B0F17</color>
-    <color name="surface_primary">#131B2E</color>
-    <color name="surface_secondary">#1E293B</color>
-    <color name="primary_cyan">#0284C7</color>
-    <color name="accent_cyan">#38BDF8</color>
-    <color name="text_primary">#F8FAFC</color>
+    <color name="background">#000000</color>
+    <color name="surface_primary">#000000</color>
+    <color name="surface_secondary">#000000</color>
+    <color name="border_white">#FFFFFF</color>
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#CCCCCC</color>
 </resources>

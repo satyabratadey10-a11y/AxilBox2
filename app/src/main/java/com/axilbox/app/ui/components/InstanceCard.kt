@@ -2,9 +2,7 @@ package com.axilbox.app.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -37,12 +35,10 @@ import androidx.compose.ui.unit.sp
 import com.axilbox.app.model.InstanceStatus
 import com.axilbox.app.model.VirtualInstance
 import com.axilbox.app.ui.theme.AxilBoxTypography
-import com.axilbox.app.ui.theme.BorderSubtle
-import com.axilbox.app.ui.theme.PrimaryCyan
-import com.axilbox.app.ui.theme.StatusErrorColor
-import com.axilbox.app.ui.theme.SurfaceElevated
-import com.axilbox.app.ui.theme.SurfacePrimary
-import com.axilbox.app.ui.theme.SurfaceSecondary
+import com.axilbox.app.ui.theme.BackgroundDark
+import com.axilbox.app.ui.theme.BorderWhite
+import com.axilbox.app.ui.theme.ButtonTextBlack
+import com.axilbox.app.ui.theme.ButtonWhite
 import com.axilbox.app.ui.theme.TextMuted
 import com.axilbox.app.ui.theme.TextPrimary
 import com.axilbox.app.ui.theme.TextSecondary
@@ -61,8 +57,8 @@ fun InstanceCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(color = SurfacePrimary, shape = RoundedCornerShape(16.dp))
-            .border(width = 1.dp, color = BorderSubtle, shape = RoundedCornerShape(16.dp))
+            .background(color = BackgroundDark, shape = RoundedCornerShape(16.dp))
+            .border(width = 1.5.dp, color = BorderWhite, shape = RoundedCornerShape(16.dp))
             .padding(16.dp)
     ) {
         // Header
@@ -79,7 +75,7 @@ fun InstanceCard(
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = instance.osType.displayName,
-                    style = AxilBoxTypography.bodySmall.copy(color = PrimaryCyan)
+                    style = AxilBoxTypography.bodySmall.copy(color = TextSecondary)
                 )
             }
             StatusBadge(status = instance.status)
@@ -145,34 +141,35 @@ fun InstanceCard(
             Button(
                 onClick = { onBootClick(instance) },
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isRunning) SurfaceElevated else PrimaryCyan,
-                    contentColor = TextPrimary
+                    containerColor = ButtonWhite,
+                    contentColor = ButtonTextBlack
                 ),
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.weight(1f)
             ) {
                 Icon(
                     imageVector = if (isRunning) Icons.Filled.Stop else Icons.Filled.PlayArrow,
                     contentDescription = null,
+                    tint = ButtonTextBlack,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = if (isRunning) "Open Console" else "Boot Instance",
-                    style = AxilBoxTypography.labelLarge.copy(fontSize = 13.sp)
+                    style = AxilBoxTypography.labelLarge.copy(fontSize = 13.sp, color = ButtonTextBlack)
                 )
             }
 
             IconButton(
                 onClick = { onEditClick(instance) },
                 modifier = Modifier
-                    .background(color = SurfaceSecondary, shape = RoundedCornerShape(10.dp))
-                    .border(width = 1.dp, color = BorderSubtle, shape = RoundedCornerShape(10.dp))
+                    .background(color = BackgroundDark, shape = RoundedCornerShape(16.dp))
+                    .border(width = 1.5.dp, color = BorderWhite, shape = RoundedCornerShape(16.dp))
             ) {
                 Icon(
                     imageVector = Icons.Filled.Edit,
                     contentDescription = "Edit Instance",
-                    tint = TextSecondary,
+                    tint = Color.White,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -180,13 +177,13 @@ fun InstanceCard(
             IconButton(
                 onClick = { onDeleteClick(instance) },
                 modifier = Modifier
-                    .background(color = SurfaceSecondary, shape = RoundedCornerShape(10.dp))
-                    .border(width = 1.dp, color = BorderSubtle, shape = RoundedCornerShape(10.dp))
+                    .background(color = BackgroundDark, shape = RoundedCornerShape(16.dp))
+                    .border(width = 1.5.dp, color = BorderWhite, shape = RoundedCornerShape(16.dp))
             ) {
                 Icon(
                     imageVector = Icons.Filled.Delete,
                     contentDescription = "Delete Instance",
-                    tint = StatusErrorColor,
+                    tint = Color.White,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -204,14 +201,14 @@ private fun SpecPill(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
         modifier = modifier
-            .background(color = SurfaceSecondary, shape = RoundedCornerShape(8.dp))
-            .border(width = 1.dp, color = BorderSubtle.copy(alpha = 0.5f), shape = RoundedCornerShape(8.dp))
+            .background(color = BackgroundDark, shape = RoundedCornerShape(8.dp))
+            .border(width = 1.dp, color = BorderWhite.copy(alpha = 0.5f), shape = RoundedCornerShape(8.dp))
             .padding(vertical = 6.dp, horizontal = 6.dp)
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = PrimaryCyan,
+            tint = Color.White,
             modifier = Modifier.size(14.dp)
         )
         Spacer(modifier = Modifier.width(4.dp))

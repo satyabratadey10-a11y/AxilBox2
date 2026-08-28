@@ -5,27 +5,27 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-private val DarkColorScheme = darkColorScheme(
-    primary = PrimaryCyan,
-    onPrimary = TextPrimary,
-    primaryContainer = SurfaceElevated,
-    onPrimaryContainer = PrimaryHover,
-    secondary = PrimaryHover,
-    onSecondary = BackgroundDark,
-    secondaryContainer = SurfaceSecondary,
+private val PureBlackColorScheme = darkColorScheme(
+    primary = ButtonWhite,
+    onPrimary = ButtonTextBlack,
+    primaryContainer = BackgroundDark,
+    onPrimaryContainer = TextPrimary,
+    secondary = ButtonWhite,
+    onSecondary = ButtonTextBlack,
+    secondaryContainer = BackgroundDark,
     onSecondaryContainer = TextPrimary,
-    tertiary = StatusBootingColor,
-    onTertiary = BackgroundDark,
+    tertiary = ButtonWhite,
+    onTertiary = ButtonTextBlack,
     background = BackgroundDark,
     onBackground = TextPrimary,
     surface = SurfacePrimary,
     onSurface = TextPrimary,
     surfaceVariant = SurfaceSecondary,
     onSurfaceVariant = TextSecondary,
-    outline = BorderSubtle,
-    outlineVariant = BorderSubtle,
-    error = StatusErrorColor,
-    onError = Color.White
+    outline = BorderWhite,
+    outlineVariant = BorderWhite,
+    error = ButtonWhite,
+    onError = ButtonTextBlack
 )
 
 @Composable
@@ -33,7 +33,7 @@ fun AxilBoxTheme(
     content: @Composable () -> Unit
 ) {
     MaterialTheme(
-        colorScheme = DarkColorScheme,
+        colorScheme = PureBlackColorScheme,
         typography = AxilBoxTypography,
         shapes = AxilBoxShapes,
         content = content

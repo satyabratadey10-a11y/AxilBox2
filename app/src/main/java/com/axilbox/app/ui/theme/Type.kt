@@ -68,14 +68,14 @@ val AxilBoxTypography = Typography(
         fontWeight = FontWeight.SemiBold,
         fontSize = 12.sp,
         lineHeight = 16.sp,
-        color = PrimaryHover
+        color = TextPrimary
     ),
     labelSmall = TextStyle(
         fontFamily = FontFamily.Monospace,
         fontWeight = FontWeight.Normal,
         fontSize = 11.sp,
         lineHeight = 14.sp,
-        color = TextMuted
+        color = TextSecondary
     )
 )
 
@@ -84,5 +84,5 @@ val MonospaceCodeStyle = TextStyle(
     fontWeight = FontWeight.Normal,
     fontSize = 12.sp,
     lineHeight = 16.sp,
-    color = TerminalTextInfo
+    color = TextPrimary
 )

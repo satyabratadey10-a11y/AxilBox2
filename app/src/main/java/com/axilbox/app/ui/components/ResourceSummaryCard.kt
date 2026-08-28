@@ -21,14 +21,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.axilbox.app.model.SystemResourceInfo
 import com.axilbox.app.ui.theme.AxilBoxTypography
-import com.axilbox.app.ui.theme.BorderSubtle
-import com.axilbox.app.ui.theme.PrimaryCyan
-import com.axilbox.app.ui.theme.StatusRunningColor
-import com.axilbox.app.ui.theme.SurfacePrimary
-import com.axilbox.app.ui.theme.SurfaceSecondary
+import com.axilbox.app.ui.theme.BackgroundDark
+import com.axilbox.app.ui.theme.BorderWhite
 import com.axilbox.app.ui.theme.TextMuted
 import com.axilbox.app.ui.theme.TextPrimary
 import com.axilbox.app.ui.theme.TextSecondary
@@ -42,8 +40,8 @@ fun ResourceSummaryCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(color = SurfacePrimary, shape = RoundedCornerShape(16.dp))
-            .border(width = 1.dp, color = BorderSubtle, shape = RoundedCornerShape(16.dp))
+            .background(color = BackgroundDark, shape = RoundedCornerShape(16.dp))
+            .border(width = 1.5.dp, color = BorderWhite, shape = RoundedCornerShape(16.dp))
             .padding(16.dp)
     ) {
         Row(
@@ -55,7 +53,7 @@ fun ResourceSummaryCard(
                 Icon(
                     imageVector = Icons.Outlined.Memory,
                     contentDescription = "Host Hardware",
-                    tint = PrimaryCyan,
+                    tint = Color.White,
                     modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.size(8.dp))
@@ -66,7 +64,7 @@ fun ResourceSummaryCard(
             }
             Text(
                 text = "${resourceInfo.availableRamMb} MB Free",
-                style = AxilBoxTypography.labelMedium.copy(color = StatusRunningColor)
+                style = AxilBoxTypography.labelMedium.copy(color = TextPrimary)
             )
         }
 
@@ -83,7 +81,7 @@ fun ResourceSummaryCard(
             )
             Text(
                 text = "${(resourceInfo.ramUsagePercent * 100).toInt()}% Used",
-                style = AxilBoxTypography.labelSmall.copy(color = TextMuted)
+                style = AxilBoxTypography.labelSmall.copy(color = TextSecondary)
             )
         }
 
@@ -94,9 +92,10 @@ fun ResourceSummaryCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(6.dp)
-                .clip(RoundedCornerShape(3.dp)),
-            color = PrimaryCyan,
-            trackColor = SurfaceSecondary
+                .clip(RoundedCornerShape(3.dp))
+                .border(0.5.dp, Color.White.copy(alpha = 0.4f), RoundedCornerShape(3.dp)),
+            color = Color.White,
+            trackColor = Color(0xFF222222)
         )
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -111,7 +110,7 @@ fun ResourceSummaryCard(
                 Icon(
                     imageVector = Icons.Outlined.Storage,
                     contentDescription = null,
-                    tint = TextMuted,
+                    tint = Color.White,
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(modifier = Modifier.size(6.dp))

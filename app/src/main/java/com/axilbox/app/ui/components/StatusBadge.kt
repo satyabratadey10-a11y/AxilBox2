@@ -27,28 +27,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.axilbox.app.model.InstanceStatus
 import com.axilbox.app.ui.theme.AxilBoxTypography
-import com.axilbox.app.ui.theme.StatusBootingColor
-import com.axilbox.app.ui.theme.StatusErrorColor
-import com.axilbox.app.ui.theme.StatusRunningColor
-import com.axilbox.app.ui.theme.StatusStoppedColor
+import com.axilbox.app.ui.theme.BackgroundDark
+import com.axilbox.app.ui.theme.BorderWhite
+import com.axilbox.app.ui.theme.TextPrimary
 
 @Composable
 fun StatusBadge(
     status: InstanceStatus,
     modifier: Modifier = Modifier
 ) {
-    val (statusColor, statusBg) = when (status) {
-        InstanceStatus.STOPPED -> Pair(StatusStoppedColor, StatusStoppedColor.copy(alpha = 0.15f))
-        InstanceStatus.BOOTING -> Pair(StatusBootingColor, StatusBootingColor.copy(alpha = 0.20f))
-        InstanceStatus.RUNNING -> Pair(StatusRunningColor, StatusRunningColor.copy(alpha = 0.20f))
-        InstanceStatus.PAUSED -> Pair(StatusBootingColor, StatusBootingColor.copy(alpha = 0.15f))
-        InstanceStatus.ERROR -> Pair(StatusErrorColor, StatusErrorColor.copy(alpha = 0.20f))
-    }
-
     val alphaAnim = if (status == InstanceStatus.BOOTING) {
         val infiniteTransition = rememberInfiniteTransition(label = "boot_pulse")
         val alpha by infiniteTransition.animateFloat(
-            initialValue = 0.4f,
+            initialValue = 0.3f,
             targetValue = 1.0f,
             animationSpec = infiniteRepeatable(
                 animation = tween(durationMillis = 800, easing = FastOutSlowInEasing),
@@ -64,21 +55,21 @@ fun StatusBadge(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
-            .background(color = statusBg, shape = RoundedCornerShape(8.dp))
-            .border(width = 1.dp, color = statusColor.copy(alpha = 0.5f), shape = RoundedCornerShape(8.dp))
+            .background(color = BackgroundDark, shape = RoundedCornerShape(8.dp))
+            .border(width = 1.5.dp, color = BorderWhite, shape = RoundedCornerShape(8.dp))
             .padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(7.dp)
+                .size(6.dp)
                 .alpha(alphaAnim)
-                .background(color = statusColor, shape = CircleShape)
+                .background(color = Color.White, shape = CircleShape)
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = status.label.uppercase(),
             style = AxilBoxTypography.labelSmall.copy(
-                color = statusColor,
+                color = TextPrimary,
                 fontSize = 10.sp
             )
         )

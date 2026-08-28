@@ -12,12 +12,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.axilbox.app.ui.theme.AxilBoxTypography
-import com.axilbox.app.ui.theme.PrimaryCyan
-import com.axilbox.app.ui.theme.StatusBootingColor
-import com.axilbox.app.ui.theme.SurfaceSecondary
-import com.axilbox.app.ui.theme.TextMuted
 import com.axilbox.app.ui.theme.TextPrimary
 import com.axilbox.app.ui.theme.TextSecondary
 
@@ -44,7 +41,7 @@ fun HardwareSpecSlider(
             )
             Text(
                 text = displayValue,
-                style = AxilBoxTypography.labelMedium.copy(color = PrimaryCyan)
+                style = AxilBoxTypography.labelMedium.copy(color = TextPrimary)
             )
         }
 
@@ -56,9 +53,9 @@ fun HardwareSpecSlider(
             valueRange = valueRange,
             steps = steps,
             colors = SliderDefaults.colors(
-                thumbColor = PrimaryCyan,
-                activeTrackColor = PrimaryCyan,
-                inactiveTrackColor = SurfaceSecondary
+                thumbColor = Color.White,
+                activeTrackColor = Color.White,
+                inactiveTrackColor = Color(0xFF333333)
             ),
             modifier = Modifier.fillMaxWidth()
         )
@@ -66,7 +63,7 @@ fun HardwareSpecSlider(
         if (warningText != null) {
             Text(
                 text = warningText,
-                style = AxilBoxTypography.labelSmall.copy(color = StatusBootingColor)
+                style = AxilBoxTypography.labelSmall.copy(color = TextSecondary)
             )
         }
     }
