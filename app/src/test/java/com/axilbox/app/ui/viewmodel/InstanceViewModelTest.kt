@@ -13,8 +13,8 @@ import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -30,7 +30,7 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class InstanceViewModelTest {
 
-    private val testDispatcher = StandardTestDispatcher()
+    private val testDispatcher = UnconfinedTestDispatcher()
     private val repository: InstanceRepository = mockk(relaxed = true)
     private val systemResourceProvider: SystemResourceProvider = mockk(relaxed = true)
 
@@ -98,9 +98,11 @@ class InstanceViewModelTest {
 
     @Test
     fun searchFiltering_filtersInstancesByName() = runTest {
-        advanceUntilIdle()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            viewModel.mainMenuUiState.collect {}
+        }
+
         viewModel.onSearchQueryChanged("Debian")
-        advanceUntilIdle()
 
         val uiState = viewModel.mainMenuUiState.value
         assertEquals(1, uiState.filteredInstances.size)
@@ -109,12 +111,15 @@ class InstanceViewModelTest {
 
     @Test
     fun promptDelete_and_confirmDelete_executesRepositoryCall() = runTest {
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            viewModel.mainMenuUiState.collect {}
+        }
+
         val target = VirtualInstance(id = 1L, name = "AOSP-14", osType = OsType.AOSP_ARM64)
         viewModel.promptDeleteInstance(target)
         assertEquals(target, viewModel.mainMenuUiState.value.selectedInstanceForDelete)
 
         viewModel.confirmDeleteInstance()
-        advanceUntilIdle()
 
         coVerify(exactly = 1) { repository.deleteInstance(target) }
         assertNull(viewModel.mainMenuUiState.value.selectedInstanceForDelete)
@@ -133,7 +138,6 @@ class InstanceViewModelTest {
 
         var saved = false
         viewModel.saveInstance { saved = true }
-        advanceUntilIdle()
 
         assertFalse(saved)
         assertNotNull(viewModel.formState.value.nameError)

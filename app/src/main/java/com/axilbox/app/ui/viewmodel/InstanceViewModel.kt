@@ -45,7 +45,7 @@ class InstanceViewModel(
         )
     }.stateIn(
         scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
+        started = SharingStarted.Eagerly,
         initialValue = MainMenuUiState()
     )
 
