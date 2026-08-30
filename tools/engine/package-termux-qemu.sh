@@ -70,23 +70,6 @@ for block in blocks:
 
 print(f" -> Indexed {len(packages)} packages from Termux repository.")
 
-# Helper to extract Depends from package metadata
-def get_package_depends(pkg_data):
-    depends_str = pkg_data.get("Depends", "")
-    if not depends_str:
-        return []
-    deps = []
-    for item in depends_str.split(","):
-        raw = item.strip()
-        if not raw:
-            continue
-        dep_name = re.sub(r'\(.*?\)', '', raw).strip()
-        if "|" in dep_name:
-            dep_name = dep_name.split("|")[0].strip()
-        if dep_name:
-            deps.append(dep_name)
-    return deps
-
 downloaded_packages = set()
 
 def download_and_extract_package(pkg_name):
@@ -95,14 +78,12 @@ def download_and_extract_package(pkg_name):
     
     pkg_data = packages.get(pkg_name)
     if not pkg_data:
-        # Try finding by removing/adding 'lib' prefix
         alt = pkg_name[3:] if pkg_name.startswith("lib") else f"lib{pkg_name}"
         pkg_data = packages.get(alt)
         if pkg_data:
             pkg_name = alt
 
     if not pkg_data:
-        # Search by case-insensitive match
         for p_name, p_data in packages.items():
             if pkg_name.lower() == p_name.lower():
                 pkg_name = p_name
@@ -156,6 +137,18 @@ def get_elf_needed(filepath):
     except Exception:
         return []
 
+def get_elf_soname(filepath):
+    try:
+        out = subprocess.check_output(["readelf", "-d", filepath], text=True, errors="ignore")
+        for line in out.splitlines():
+            if "(SONAME)" in line:
+                m = re.search(r'\[(.*?)\]', line)
+                if m:
+                    return m.group(1)
+    except Exception:
+        pass
+    return None
+
 def get_canonical_name(filename):
     base = os.path.basename(filename)
     canonical = re.sub(r'(\.so)(?:\.\d+)+$', r'\1', base)
@@ -165,14 +158,15 @@ def get_canonical_name(filename):
         canonical = canonical + ".so"
     return canonical
 
-# Library to package resolution mapping
+# Precise mapping of library stems to official Termux package names
 KNOWN_LIB_MAP = {
-    "gnutls": "gnutls",
-    "nettle": "nettle",
-    "hogweed": "nettle",
+    "gnutls": "libgnutls",
+    "nettle": "libnettle",
+    "hogweed": "libnettle",
     "gmp": "libgmp",
     "tasn1": "libtasn1",
     "p11-kit": "p11-kit",
+    "unbound": "libunbound",
     "unistring": "libunistring",
     "idn2": "libidn2",
     "pixman": "libpixman",
@@ -198,21 +192,26 @@ KNOWN_LIB_MAP = {
     "ffi": "libffi",
     "z": "zlib",
     "c++": "libc++",
-    "c++_shared": "libc++"
+    "c++_shared": "libc++",
+    "android-support": "libandroid-support",
+    "event": "libevent",
+    "nghttp2": "libnghttp2",
+    "ngtcp2": "libngtcp2",
+    "ssl": "openssl",
+    "crypto": "openssl"
 }
 
 def resolve_package_for_lib(needed_so, canon_name):
-    # Strip lib prefix and .so suffix
     stem = re.sub(r'^lib', '', needed_so)
     stem = re.sub(r'(\.so)(?:\.\d+)*$', '', stem)
     stem_no_num = re.sub(r'[-_]\d+.*$', '', stem)
 
-    for lookup in [stem, stem_no_num, canon_name]:
+    for lookup in [stem, stem_no_num, canon_name, needed_so]:
         if lookup in KNOWN_LIB_MAP:
             return KNOWN_LIB_MAP[lookup]
 
-    candidates = [stem, f"lib{stem}", stem_no_num, f"lib{stem_no_num}"]
-    for cand in candidates:
+    # Package index lookups
+    for cand in [f"lib{stem}", stem, f"lib{stem_no_num}", stem_no_num]:
         if cand in packages:
             return cand
 
@@ -225,11 +224,22 @@ def resolve_package_for_lib(needed_so, canon_name):
 def find_elf_providing(needed_so, canon_name):
     for root, dirs, files in os.walk(work_dir):
         for f in files:
-            if f == needed_so or f == canon_name or get_canonical_name(f) == canon_name:
-                full_p = os.path.join(root, f)
-                real_p = os.path.realpath(full_p)
-                if is_elf_file(real_p):
-                    return real_p
+            full_p = os.path.join(root, f)
+            if os.path.islink(full_p):
+                continue
+            if not is_elf_file(full_p):
+                continue
+
+            bname = os.path.basename(full_p)
+            cname = get_canonical_name(bname)
+
+            if bname == needed_so or cname == canon_name or bname.startswith(canon_name):
+                return full_p
+
+            soname = get_elf_soname(full_p)
+            if soname and (soname == needed_so or get_canonical_name(soname) == canon_name):
+                return full_p
+
     return None
 
 # 2. Download root package: qemu-system-aarch64-headless
@@ -241,9 +251,8 @@ qemu_bin = None
 for root, dirs, files in os.walk(work_dir):
     if "qemu-system-aarch64" in files:
         candidate = os.path.join(root, "qemu-system-aarch64")
-        real_cand = os.path.realpath(candidate)
-        if is_elf_file(real_cand):
-            qemu_bin = real_cand
+        if not os.path.islink(candidate) and is_elf_file(candidate):
+            qemu_bin = candidate
             break
 
 if not qemu_bin:
@@ -269,7 +278,6 @@ while needed_queue:
     canon_name = get_canonical_name(needed_so)
     rename_map[needed_so] = canon_name
 
-    # Check if already present in work_dir
     found_elf = find_elf_providing(needed_so, canon_name)
     if not found_elf:
         pkg_name = resolve_package_for_lib(needed_so, canon_name)
@@ -281,7 +289,10 @@ while needed_queue:
     if found_elf:
         required_elf_paths[canon_name] = found_elf
         rename_map[os.path.basename(found_elf)] = canon_name
-        # Add its DT_NEEDED entries to queue
+        soname = get_elf_soname(found_elf)
+        if soname:
+            rename_map[soname] = canon_name
+
         for sub_needed in get_elf_needed(found_elf):
             if sub_needed not in processed_needed and sub_needed not in SYSTEM_LIBS:
                 needed_queue.append(sub_needed)
