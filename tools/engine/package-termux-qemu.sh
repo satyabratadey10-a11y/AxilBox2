@@ -18,7 +18,7 @@ curl -sSL "${PACKAGES_INDEX_URL}" -o "${WORK_DIR}/Packages" || {
     curl -sSL "https://raw.githubusercontent.com/termux/termux-packages/gh-pages/dists/stable/main/binary-aarch64/Packages" -o "${WORK_DIR}/Packages"
 }
 
-echo "[2/4] Resolving and downloading complete recursive dependency closure..."
+echo "[2/4] Resolving and downloading targeted recursive dependency closure..."
 
 WORK_DIR="${WORK_DIR}" OUTPUT_DIR="${OUTPUT_DIR}" APT_REPO="${APT_REPO}" python3 - <<'PY_SCRIPT'
 import os
@@ -26,7 +26,6 @@ import sys
 import subprocess
 import shutil
 import re
-import urllib.request
 
 work_dir = os.environ["WORK_DIR"]
 output_dir = os.environ["OUTPUT_DIR"]
@@ -40,7 +39,15 @@ SYSTEM_LIBS = {
     "libc.so",
     "libm.so",
     "libdl.so",
-    "liblog.so"
+    "liblog.so",
+    "libandroid.so",
+    "libaaudio.so",
+    "libEGL.so",
+    "libGLESv1_CM.so",
+    "libGLESv2.so",
+    "libGLESv3.so",
+    "libvulkan.so",
+    "libOpenSLES.so"
 }
 
 # 1. Parse Termux Packages index
@@ -95,7 +102,7 @@ def download_and_extract_package(pkg_name):
             pkg_name = alt
 
     if not pkg_data:
-        # Fuzzy match
+        # Search by case-insensitive match
         for p_name, p_data in packages.items():
             if pkg_name.lower() == p_name.lower():
                 pkg_name = p_name
@@ -126,42 +133,8 @@ def download_and_extract_package(pkg_name):
         print(f"   Error downloading/extracting {pkg_name}: {e}", file=sys.stderr)
         return False
 
-# Initial seed packages for QEMU aarch64 and core runtime
-seed_pkgs = [
-    "qemu-system-aarch64-headless",
-    "glib",
-    "libpixman",
-    "libandroid-shmem",
-    "libiconv",
-    "pcre2",
-    "libffi",
-    "zlib",
-    "gnutls",
-    "nettle",
-    "libgmp",
-    "libtasn1",
-    "p11-kit",
-    "libunistring",
-    "libidn2",
-    "libc++"
-]
-
-print(" -> Resolving initial package dependencies tree...")
-queue = list(seed_pkgs)
-while queue:
-    current = queue.pop(0)
-    if current in downloaded_packages:
-        continue
-    success = download_and_extract_package(current)
-    if success:
-        pkg_data = packages.get(current, {})
-        for dep in get_package_depends(pkg_data):
-            if dep not in downloaded_packages and dep not in queue:
-                queue.append(dep)
-
-# Helper functions for ELF examination
 def is_elf_file(filepath):
-    if not os.path.isfile(filepath) or os.path.islink(filepath):
+    if not os.path.isfile(filepath):
         return False
     try:
         with open(filepath, "rb") as f:
@@ -192,141 +165,164 @@ def get_canonical_name(filename):
         canonical = canonical + ".so"
     return canonical
 
-# 2. Recursive ELF DT_NEEDED closure loop
-print(" -> Running recursive ELF DT_NEEDED closure analysis...")
-iteration = 0
-while True:
-    iteration += 1
-    # Find all ELF binaries and shared libraries in work_dir
-    all_elfs = []
-    available_sos = {} # name -> path
+# Library to package resolution mapping
+KNOWN_LIB_MAP = {
+    "gnutls": "gnutls",
+    "nettle": "nettle",
+    "hogweed": "nettle",
+    "gmp": "libgmp",
+    "tasn1": "libtasn1",
+    "p11-kit": "p11-kit",
+    "unistring": "libunistring",
+    "idn2": "libidn2",
+    "pixman": "libpixman",
+    "pixman-1": "libpixman",
+    "glib": "glib",
+    "glib-2.0": "glib",
+    "gmodule": "glib",
+    "gmodule-2.0": "glib",
+    "gobject": "glib",
+    "gobject-2.0": "glib",
+    "gio": "glib",
+    "gio-2.0": "glib",
+    "gthread": "glib",
+    "gthread-2.0": "glib",
+    "android-shmem": "libandroid-shmem",
+    "iconv": "libiconv",
+    "charset": "libiconv",
+    "pcre2": "pcre2",
+    "pcre2-8": "pcre2",
+    "pcre2-16": "pcre2",
+    "pcre2-32": "pcre2",
+    "pcre2-posix": "pcre2",
+    "ffi": "libffi",
+    "z": "zlib",
+    "c++": "libc++",
+    "c++_shared": "libc++"
+}
+
+def resolve_package_for_lib(needed_so, canon_name):
+    # Strip lib prefix and .so suffix
+    stem = re.sub(r'^lib', '', needed_so)
+    stem = re.sub(r'(\.so)(?:\.\d+)*$', '', stem)
+    stem_no_num = re.sub(r'[-_]\d+.*$', '', stem)
+
+    for lookup in [stem, stem_no_num, canon_name]:
+        if lookup in KNOWN_LIB_MAP:
+            return KNOWN_LIB_MAP[lookup]
+
+    candidates = [stem, f"lib{stem}", stem_no_num, f"lib{stem_no_num}"]
+    for cand in candidates:
+        if cand in packages:
+            return cand
+
+    for p_name in packages:
+        if stem.lower() == p_name.lower():
+            return p_name
+
+    return None
+
+def find_elf_providing(needed_so, canon_name):
     for root, dirs, files in os.walk(work_dir):
         for f in files:
-            full_path = os.path.join(root, f)
-            if is_elf_file(full_path):
-                all_elfs.append(full_path)
-                bname = os.path.basename(full_path)
-                available_sos[bname] = full_path
-                canon = get_canonical_name(bname)
-                available_sos[canon] = full_path
+            if f == needed_so or f == canon_name or get_canonical_name(f) == canon_name:
+                full_p = os.path.join(root, f)
+                real_p = os.path.realpath(full_p)
+                if is_elf_file(real_p):
+                    return real_p
+    return None
 
-    # Collect all DT_NEEDED entries
-    all_needed = set()
-    for elf in all_elfs:
-        for needed in get_elf_needed(elf):
-            all_needed.add(needed)
+# 2. Download root package: qemu-system-aarch64-headless
+print(" -> Provisioning root package: qemu-system-aarch64-headless...")
+download_and_extract_package("qemu-system-aarch64-headless")
 
-    # Find missing dependencies
-    missing = set()
-    for needed in all_needed:
-        if needed in SYSTEM_LIBS:
-            continue
-        canon_needed = get_canonical_name(needed)
-        if needed not in available_sos and canon_needed not in available_sos:
-            missing.add(needed)
-
-    if not missing:
-        print(f" -> All ELF DT_NEEDED dependencies satisfied after {iteration} iteration(s)!")
-        break
-
-    print(f" -> Iteration {iteration}: Found {len(missing)} unresolved DT_NEEDED dependencies: {sorted(missing)}")
-    new_download_count = 0
-
-    for miss in missing:
-        # Derive package search stem (e.g. libgnutls.so.30 -> gnutls, libnettle.so.8 -> nettle)
-        stem = re.sub(r'^lib', '', miss)
-        stem = re.sub(r'(\.so)(?:\.\d+)*$', '', stem)
-        candidates = [stem, f"lib{stem}"]
-
-        matched_pkg = None
-        for cand in candidates:
-            if cand in packages:
-                matched_pkg = cand
-                break
-
-        if not matched_pkg:
-            for p_name, p_data in packages.items():
-                if stem.lower() == p_name.lower() or f"lib{stem.lower()}" == p_name.lower():
-                    matched_pkg = p_name
-                    break
-
-        if not matched_pkg:
-            for p_name, p_data in packages.items():
-                if stem.lower() in p_name.lower():
-                    matched_pkg = p_name
-                    break
-
-        if matched_pkg and matched_pkg not in downloaded_packages:
-            print(f"    -> Resolving missing dependency '{miss}' via package '{matched_pkg}'")
-            if download_and_extract_package(matched_pkg):
-                new_download_count += 1
-
-    if new_download_count == 0:
-        print(f"Warning: Could not automatically resolve remaining missing dependencies: {missing}", file=sys.stderr)
-        break
-
-# 3. Assemble and normalize into OUTPUT_DIR (lib*.so)
-print("[3/4] Assembling and normalizing native libraries into output directory...")
-
-# Find QEMU executable
+# Locate qemu-system-aarch64 executable
 qemu_bin = None
 for root, dirs, files in os.walk(work_dir):
     if "qemu-system-aarch64" in files:
         candidate = os.path.join(root, "qemu-system-aarch64")
-        if is_elf_file(candidate):
-            qemu_bin = candidate
+        real_cand = os.path.realpath(candidate)
+        if is_elf_file(real_cand):
+            qemu_bin = real_cand
             break
 
 if not qemu_bin:
-    print("ERROR: qemu-system-aarch64 binary not found in extracted packages!", file=sys.stderr)
+    print("ERROR: qemu-system-aarch64 executable not found in extracted packages!", file=sys.stderr)
     sys.exit(1)
 
+print(f" -> Found QEMU binary at {qemu_bin}")
+
+# 3. Targeted Recursive Dependency Graph Resolution
+print(" -> Running targeted recursive DT_NEEDED closure search from QEMU binary...")
+
+needed_queue = list(get_elf_needed(qemu_bin))
+processed_needed = set()
+required_elf_paths = {} # canon_name -> real_path
+rename_map = {} # old_needed_name -> canon_name
+
+while needed_queue:
+    needed_so = needed_queue.pop(0)
+    if needed_so in processed_needed or needed_so in SYSTEM_LIBS:
+        continue
+    processed_needed.add(needed_so)
+
+    canon_name = get_canonical_name(needed_so)
+    rename_map[needed_so] = canon_name
+
+    # Check if already present in work_dir
+    found_elf = find_elf_providing(needed_so, canon_name)
+    if not found_elf:
+        pkg_name = resolve_package_for_lib(needed_so, canon_name)
+        if pkg_name:
+            print(f"   -> Resolving '{needed_so}' via package '{pkg_name}'")
+            download_and_extract_package(pkg_name)
+            found_elf = find_elf_providing(needed_so, canon_name)
+
+    if found_elf:
+        required_elf_paths[canon_name] = found_elf
+        rename_map[os.path.basename(found_elf)] = canon_name
+        # Add its DT_NEEDED entries to queue
+        for sub_needed in get_elf_needed(found_elf):
+            if sub_needed not in processed_needed and sub_needed not in SYSTEM_LIBS:
+                needed_queue.append(sub_needed)
+    else:
+        print(f"ERROR: Could not resolve required dependency '{needed_so}' ({canon_name})!", file=sys.stderr)
+        sys.exit(1)
+
+print(f" -> Successfully resolved {len(required_elf_paths)} transitive shared libraries for QEMU.")
+
+# 4. Assemble into OUTPUT_DIR
+print("[3/4] Assembling and normalizing native libraries into output directory...")
+
+# Copy QEMU binary as libqemu_system_aarch64.so
 qemu_target_so = os.path.join(output_dir, "libqemu_system_aarch64.so")
 shutil.copy2(qemu_bin, qemu_target_so)
 os.chmod(qemu_target_so, 0o755)
 print(f" -> Copied QEMU binary -> {qemu_target_so}")
 
-# Locate and copy all .so files
-rename_map = {}
-for root, dirs, files in os.walk(work_dir):
-    for f in files:
-        if ".so" in f:
-            full_path = os.path.join(root, f)
-            real_path = os.path.realpath(full_path)
-            if not is_elf_file(real_path):
-                continue
-            
-            orig_name = os.path.basename(full_path)
-            canon_name = get_canonical_name(orig_name)
-            rename_map[orig_name] = canon_name
-            rename_map[os.path.basename(real_path)] = canon_name
+# Copy all required shared libraries
+for canon_name, src_path in required_elf_paths.items():
+    dst_path = os.path.join(output_dir, canon_name)
+    shutil.copy2(src_path, dst_path)
+    os.chmod(dst_path, 0o755)
+    print(f"    + {canon_name} (from {os.path.basename(src_path)})")
 
-            target_path = os.path.join(output_dir, canon_name)
-            if not os.path.exists(target_path) or os.path.getsize(target_path) < os.path.getsize(real_path):
-                shutil.copy2(real_path, target_path)
-                os.chmod(target_path, 0o755)
-
-print(f" -> Total bundled shared libraries: {len(os.listdir(output_dir))}")
-
-# 4. Patch ELF DT_SONAME, DT_NEEDED, and RPATH ($ORIGIN)
+# 5. Patch ELF DT_SONAME, DT_NEEDED, and RPATH ($ORIGIN)
 print("[4/4] Patching ELF RPATH to $ORIGIN and remapping DT_NEEDED entries...")
 all_output_sos = [os.path.join(output_dir, f) for f in os.listdir(output_dir) if f.startswith("lib") and f.endswith(".so")]
 
 for so_path in all_output_sos:
     fname = os.path.basename(so_path)
-    # Set soname
     try:
         subprocess.run(["patchelf", "--set-soname", fname, so_path], check=False)
     except Exception:
         pass
 
-    # Set RPATH to $ORIGIN
     try:
         subprocess.run(["patchelf", "--set-rpath", "$ORIGIN", so_path], check=True)
     except Exception as e:
         print(f"Warning: Failed to set RPATH on {fname}: {e}", file=sys.stderr)
 
-    # Patch NEEDED entries
     needed_libs = get_elf_needed(so_path)
     for needed in needed_libs:
         canon_needed = rename_map.get(needed, get_canonical_name(needed))
@@ -336,7 +332,7 @@ for so_path in all_output_sos:
             except Exception as e:
                 print(f"Warning: Failed to replace needed {needed} in {fname}: {e}", file=sys.stderr)
 
-# 5. Strict completeness validation
+# 6. Strict completeness validation
 print("=== Strict DT_NEEDED Completeness Verification ===")
 missing_total = 0
 available_bundle_sos = set(os.listdir(output_dir))
