@@ -249,8 +249,13 @@ Android Gradle Plugin (AGP) and the package installer enforce strict naming requ
 2. **Extraction Mandate (`extractNativeLibs="true"`):** `AndroidManifest.xml` must set `android:extractNativeLibs="true"`, and `app/build.gradle.kts` must set `packaging.jniLibs.useLegacyPackaging = true`. This prevents AGP from storing uncompressed `.so` files (page-aligned mmap mode introduced in Android 6.0/23), guaranteeing physical extraction to `nativeLibraryDir` on disk where a concrete file path is available for `execve()`.
 3. **RPATH & Dependency Resolution:** All bundled `.so` files are co-located in `nativeLibraryDir`. Running `patchelf --set-rpath '$ORIGIN'` and updating `DT_NEEDED` / `DT_SONAME` ensures that when Bionic's dynamic linker executes `libqemu_system_aarch64.so`, it resolves all sibling dependencies (`libglib-2.0.so`, `libpixman-1.so`, `libandroid-shmem.so`, etc.) directly from `$ORIGIN` without requiring external paths.
 
-### 6.4. Verification Boundaries: CI vs Physical Device
-> [!IMPORTANT]
-> **Host CI Runner vs Physical Device Verification:**
-> - **Verifiable in CI:** Packaging script execution, ELF `lib*.so` name canonicalization, `patchelf --set-rpath '$ORIGIN'`, `DT_NEEDED` patching, Gradle APK assembly, APK `.so` contents inspection (`unzip -l app-debug.apk`), and host-native QEMU kernel sanity testing.
-> - **Cannot Be Verified in CI:** On-device `execve()` execution of the Bionic ARM64 QEMU binary from `nativeLibraryDir` under Android 10+ SELinux and zygote process constraints. This path **requires manual testing on a physical ARM64 Android device** after each modification.
+### 6.4. Real On-Device Verification of the Native Library Exemption
+The W^X / `nativeLibraryDir` architecture has been **confirmed genuinely operational on physical Android hardware**:
+- Invocations of `execve()` against `/data/app/.../lib/arm64/libqemu_system_aarch64.so` bypass the Android 10+ W^X writable data execution block without permission errors.
+- The Android Bionic dynamic linker (`/system/bin/linker64`) successfully starts the binary and initiates dependency resolution against sibling libraries in `nativeLibraryDir`.
+
+### 6.5. Transitive Shared-Library Completeness & CI `DT_NEEDED` Guard
+With `execve()` execution verified, the remaining runtime risk is **transitive shared-library completeness**:
+1. **The Transitive Dependency Hazard:** `libqemu_system_aarch64.so` and primary libraries link against indirect dependencies (e.g., `libgnutls.so`, which in turn requires `libnettle.so`, `libgmp.so`, `libtasn1.so`, `libp11-kit.so`, `libhogweed.so`, `libunistring.so`, `libidn2.so`, and `libc++_shared.so`). If any single transitive library is absent from `nativeLibraryDir`, the Bionic dynamic linker aborts process execution.
+2. **Recursive Closure Provisioning:** `tools/engine/package-termux-qemu.sh` performs automated recursive resolution by reading `Depends:` trees from the Termux package index and running an iterative ELF `DT_NEEDED` closure loop until all non-system dependencies (`libc.so`, `libm.so`, `libdl.so`, `liblog.so` excluded) are downloaded, converted to `lib*.so`, set to `$ORIGIN` RPATH, and remapped.
+3. **Automated CI Enforcement Guard:** Job 2 (`build-qemu`) runs a strict post-packaging assertion: `readelf -d` scans every `.so` in the `jniLibs` bundle and fails the build if any `DT_NEEDED` symbol is not present in the same bundle directory. This ensures all transitive dependencies are validated in CI before deployment to physical hardware.

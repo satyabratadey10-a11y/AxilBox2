@@ -133,6 +133,47 @@ jobs:
           echo "=== jniLibs Bundle Contents ==="
           ls -la jniLibs-bundle/arm64-v8a/
 
+      - name: Strict Transitive Dependency Assertion (DT_NEEDED Completeness)
+        run: |
+          python3 - <<'EOF'
+          import os, sys, subprocess, re
+
+          bundle_dir = "jniLibs-bundle/arm64-v8a"
+          system_libs = {"libc.so", "libm.so", "libdl.so", "liblog.so"}
+          bundle_files = set(os.listdir(bundle_dir))
+
+          print(f"=== Checking DT_NEEDED Completeness across {len(bundle_files)} libraries ===")
+          missing_deps = {}
+
+          for fname in sorted(bundle_files):
+              if not (fname.startswith("lib") and fname.endswith(".so")):
+                  continue
+              fpath = os.path.join(bundle_dir, fname)
+              try:
+                  out = subprocess.check_output(["readelf", "-d", fpath], text=True, errors="ignore")
+              except Exception as e:
+                  print(f"Error reading ELF headers for {fname}: {e}", file=sys.stderr)
+                  sys.exit(1)
+
+              for line in out.splitlines():
+                  if "(NEEDED)" in line:
+                      m = re.search(r'\[(.*?)\]', line)
+                      if m:
+                          dep = m.group(1)
+                          if dep in system_libs:
+                              continue
+                          if dep not in bundle_files:
+                              missing_deps.setdefault(fname, []).append(dep)
+
+          if missing_deps:
+              print("FATAL: Found unsatisfied transitive DT_NEEDED dependencies:", file=sys.stderr)
+              for so, missing in missing_deps.items():
+                  print(f"  - {so} missing: {missing}", file=sys.stderr)
+              sys.exit(1)
+
+          print("✓ 100% DT_NEEDED completeness verified: all transitive dependencies are present in the bundle.")
+          EOF
+
       - name: Upload QEMU jniLibs Bundle Artifact
         uses: actions/upload-artifact@v4
         with:
