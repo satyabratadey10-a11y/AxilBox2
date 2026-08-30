@@ -91,15 +91,15 @@ done
 echo "[3/5] Locating QEMU executable and shared libraries..."
 
 # Python helper to normalize names into lib*.so and patch ELF DT_NEEDED, DT_SONAME, and RPATH ($ORIGIN)
-python3 - <<PY_SCRIPT
+WORK_DIR="${WORK_DIR}" OUTPUT_DIR="${OUTPUT_DIR}" python3 - <<'PY_SCRIPT'
 import os
 import sys
 import subprocess
 import shutil
 import re
 
-work_dir = "${WORK_DIR}"
-output_dir = "${OUTPUT_DIR}"
+work_dir = os.environ["WORK_DIR"]
+output_dir = os.environ["OUTPUT_DIR"]
 os.makedirs(output_dir, exist_ok=True)
 
 # 1. Locate qemu-system-aarch64 executable
@@ -177,7 +177,7 @@ def get_elf_needed(filepath):
     except Exception:
         return []
 
-print("[5/5] Patching ELF RPATH to \$ORIGIN and updating DT_NEEDED entries...")
+print("[5/5] Patching ELF RPATH to $ORIGIN and updating DT_NEEDED entries...")
 for so_path in all_output_sos:
     fname = os.path.basename(so_path)
     # Set soname for shared libraries (not the main qemu exec if it has none, but harmless if set)
@@ -186,7 +186,7 @@ for so_path in all_output_sos:
     except Exception:
         pass
 
-    # Set RPATH to \$ORIGIN for co-located dynamic linking in nativeLibraryDir
+    # Set RPATH to $ORIGIN for co-located dynamic linking in nativeLibraryDir
     try:
         subprocess.run(["patchelf", "--set-rpath", "$ORIGIN", so_path], check=True)
     except Exception as e:
