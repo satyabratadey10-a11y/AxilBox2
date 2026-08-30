@@ -231,3 +231,26 @@ A generic GSI (e.g. `system.img` from an OTA) assumes physical vendor HALs (`and
    BOARD_KERNEL_CMDLINE += console=ttyAMA0 earlycon=pl011,0x09000000 androidboot.hardware=virt
    ```
 4. **Generate Sparse Images:** Output `system.img`, `vendor.img`, and `ramdisk.img` are converted to raw ext4 images using `simg2img` before attaching as `virtio-blk` disks.
+
+---
+
+## 6. Android 10+ (API 29+) W^X Execution Restrictions & Native Library Packaging (`jniLibs`)
+
+### 6.1. The Platform Constraint (W^X & `noexec` on Internal Storage)
+Starting in Android 10 (API level 29), Google enforced W^X (Write XOR Execute) security restrictions across all app-private writable data directories (`/data/data/<package>/`, `/data/user/0/<package>/files/`, and `/data/user/0/<package>/cache/`).
+Specifically, the underlying filesystems and SELinux policies prevent `execve()` execution of binaries placed in writable app directories. Attempting to execute an ELF binary extracted to `context.filesDir` (e.g. via `chmod +x` and `ProcessBuilder`/`execve`) fails unconditionally with `java.io.IOException: Cannot run program ...: error=13, Permission denied`, regardless of UNIX file permission bits (`0755` / `0777`).
+
+### 6.2. The Native Library (`nativeLibraryDir`) Exemption
+Android explicitly exempts the application's native library directory (`context.applicationInfo.nativeLibraryDir`, e.g. `/data/app/.../lib/arm64/`) from this restriction. Binaries and shared libraries extracted into `nativeLibraryDir` at APK installation time are mounted read-only and executable (`r-x`) under SELinux rules, allowing direct `execve()` invocation.
+
+### 6.3. APK Packaging Requirements & Renaming Rule
+Android Gradle Plugin (AGP) and the package installer enforce strict naming requirements for files placed in `app/src/main/jniLibs/<abi>/`:
+1. **Naming Pattern:** Every file MUST start with `lib` and end with `.so` (e.g., `libqemu_system_aarch64.so`, `libglib-2.0.so`, `libpixman-1.so`). Files without the `lib` prefix or with trailing version numbers (e.g. `libglib-2.0.so.0` or raw `qemu-system-aarch64`) are silently skipped and omitted from the APK.
+2. **Extraction Mandate (`extractNativeLibs="true"`):** `AndroidManifest.xml` must set `android:extractNativeLibs="true"`, and `app/build.gradle.kts` must set `packaging.jniLibs.useLegacyPackaging = true`. This prevents AGP from storing uncompressed `.so` files (page-aligned mmap mode introduced in Android 6.0/23), guaranteeing physical extraction to `nativeLibraryDir` on disk where a concrete file path is available for `execve()`.
+3. **RPATH & Dependency Resolution:** All bundled `.so` files are co-located in `nativeLibraryDir`. Running `patchelf --set-rpath '$ORIGIN'` and updating `DT_NEEDED` / `DT_SONAME` ensures that when Bionic's dynamic linker executes `libqemu_system_aarch64.so`, it resolves all sibling dependencies (`libglib-2.0.so`, `libpixman-1.so`, `libandroid-shmem.so`, etc.) directly from `$ORIGIN` without requiring external paths.
+
+### 6.4. Verification Boundaries: CI vs Physical Device
+> [!IMPORTANT]
+> **Host CI Runner vs Physical Device Verification:**
+> - **Verifiable in CI:** Packaging script execution, ELF `lib*.so` name canonicalization, `patchelf --set-rpath '$ORIGIN'`, `DT_NEEDED` patching, Gradle APK assembly, APK `.so` contents inspection (`unzip -l app-debug.apk`), and host-native QEMU kernel sanity testing.
+> - **Cannot Be Verified in CI:** On-device `execve()` execution of the Bionic ARM64 QEMU binary from `nativeLibraryDir` under Android 10+ SELinux and zygote process constraints. This path **requires manual testing on a physical ARM64 Android device** after each modification.

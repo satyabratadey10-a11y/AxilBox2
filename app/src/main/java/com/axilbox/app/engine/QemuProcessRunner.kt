@@ -19,13 +19,16 @@ class QemuProcessRunner(
 
     fun runQemu(args: List<String>): Flow<String> = flow {
         val processBuilder = ProcessBuilder(args)
-        processBuilder.directory(provisioner.engineDir)
+        val workingDir = provisioner.kernelDir.parentFile ?: provisioner.kernelDir
+        processBuilder.directory(workingDir)
 
         val env = processBuilder.environment()
         val existingLd = env["LD_LIBRARY_PATH"] ?: ""
-        val customLd = "${provisioner.libDir.absolutePath}:${provisioner.engineDir.absolutePath}"
-        env["LD_LIBRARY_PATH"] = if (existingLd.isNotEmpty()) "$customLd:$existingLd" else customLd
-        env["TMPDIR"] = provisioner.engineDir.absolutePath
+        val nativeLd = provisioner.nativeLibDir.absolutePath
+        env["LD_LIBRARY_PATH"] = if (existingLd.isNotEmpty()) "$nativeLd:$existingLd" else nativeLd
+        
+        val tmpDir = File(workingDir, "cache").apply { mkdirs() }
+        env["TMPDIR"] = tmpDir.absolutePath
 
         processBuilder.redirectErrorStream(true)
 

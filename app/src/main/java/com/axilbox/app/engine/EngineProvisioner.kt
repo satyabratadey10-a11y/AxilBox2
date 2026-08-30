@@ -6,27 +6,30 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
 
 class EngineProvisioner(private val context: Context) {
 
-    val engineDir: File
-        get() = File(context.filesDir, "engine")
+    /**
+     * Native library directory where Android extracts lib*.so files at install time
+     * (exempt from Android 10+ W^X / noexec restriction on writable data directories).
+     */
+    val nativeLibDir: File
+        get() = File(context.applicationInfo.nativeLibraryDir)
+
+    /**
+     * Packaged QEMU aarch64 binary named per Android's required lib*.so pattern.
+     */
+    val qemuBinary: File
+        get() = File(nativeLibDir, "libqemu_system_aarch64.so")
 
     val kernelDir: File
         get() = File(context.filesDir, "kernel")
 
-    val qemuBinary: File
-        get() = File(engineDir, "qemu-system-aarch64")
-
     val bundledKernelImage: File
         get() = File(kernelDir, "Image")
 
-    val libDir: File
-        get() = File(engineDir, "lib")
-
     fun isEngineAvailable(): Boolean {
-        return qemuBinary.exists() && NativeEngineBridge.hasExecutable(qemuBinary.absolutePath)
+        return qemuBinary.exists() && (qemuBinary.canExecute() || NativeEngineBridge.hasExecutable(qemuBinary.absolutePath))
     }
 
     fun isKernelAvailable(): Boolean {
@@ -35,35 +38,16 @@ class EngineProvisioner(private val context: Context) {
 
     suspend fun provisionEngineIfNeeded(): Boolean = withContext(Dispatchers.IO) {
         try {
-            if (!engineDir.exists()) {
-                engineDir.mkdirs()
-            }
             if (!kernelDir.exists()) {
                 kernelDir.mkdirs()
             }
-            if (!libDir.exists()) {
-                libDir.mkdirs()
+
+            // Copy bundled guest kernel from assets to app private storage if not already present
+            if (!isKernelAvailable()) {
+                copyAssetFolder("kernel", kernelDir)
             }
 
-            // Copy engine binaries and shared libraries from assets
-            copyAssetFolder("engine", engineDir)
-
-            // Copy kernel from assets
-            copyAssetFolder("kernel", kernelDir)
-
-            // Make QEMU binary executable
-            if (qemuBinary.exists()) {
-                NativeEngineBridge.chmodExecutable(qemuBinary.absolutePath)
-            }
-
-            // Make any .so in libDir executable
-            libDir.listFiles()?.forEach { libFile ->
-                if (libFile.isFile) {
-                    NativeEngineBridge.chmodExecutable(libFile.absolutePath)
-                }
-            }
-
-            isEngineAvailable()
+            isEngineAvailable() && isKernelAvailable()
         } catch (_: Exception) {
             false
         }

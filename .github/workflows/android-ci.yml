@@ -105,7 +105,7 @@ jobs:
           retention-days: 7
 
   # =========================================================================
-  # JOB 2 — QEMU + deps: Termux Bionic aarch64 Recipes Packaging
+  # JOB 2 — QEMU + deps: Termux Bionic aarch64 jniLibs Packaging
   # =========================================================================
   build-qemu:
     name: "Job 2 — Build/Package QEMU aarch64 & Bionic Dependencies"
@@ -120,33 +120,32 @@ jobs:
       - name: Install Tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y patchelf binutils-aarch64-linux-gnu file curl
+          sudo apt-get install -y patchelf binutils-aarch64-linux-gnu file curl python3
 
-      - name: Provision QEMU & Bionic Shared Libs Bundle
+      - name: Provision QEMU & Bionic Shared Libs Bundle (jniLibs arm64-v8a)
         run: |
-          bash tools/engine/package-termux-qemu.sh qemu-bundle
+          bash tools/engine/package-termux-qemu.sh jniLibs-bundle/arm64-v8a
 
       - name: Verify ELF Architecture & Linked Dependencies
         run: |
-          file qemu-bundle/qemu-system-aarch64
-          aarch64-linux-gnu-readelf -h qemu-bundle/qemu-system-aarch64
-          echo "=== Bundle Contents ==="
-          ls -la qemu-bundle
-          ls -la qemu-bundle/lib
+          file jniLibs-bundle/arm64-v8a/libqemu_system_aarch64.so
+          aarch64-linux-gnu-readelf -h jniLibs-bundle/arm64-v8a/libqemu_system_aarch64.so
+          echo "=== jniLibs Bundle Contents ==="
+          ls -la jniLibs-bundle/arm64-v8a/
 
-      - name: Upload QEMU Bundle Artifact
+      - name: Upload QEMU jniLibs Bundle Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: qemu-aarch64-bundle
-          path: qemu-bundle/
+          name: qemu-jniLibs-bundle
+          path: jniLibs-bundle/
           if-no-files-found: error
           retention-days: 7
 
   # =========================================================================
-  # JOB 3 — App Build: Bundle Job 1 & 2 Artifacts + CI-Verified Real Boot
+  # JOB 3 — App Build: Bundle Job 1 & 2 Artifacts + Host QEMU Kernel Sanity Check
   # =========================================================================
   build-app:
-    name: "Job 3 — App Build & CI-Verified Boot Test"
+    name: "Job 3 — App Build & Host QEMU Kernel Sanity Check"
     runs-on: ubuntu-latest
     needs: [build-kernel, build-qemu]
     permissions:
@@ -176,18 +175,18 @@ jobs:
           name: guest-kernel-image
           path: app/src/main/assets/kernel/
 
-      - name: Download QEMU Bundle Artifact (Job 2)
+      - name: Download QEMU jniLibs Bundle Artifact (Job 2)
         uses: actions/download-artifact@v4
         with:
-          name: qemu-aarch64-bundle
-          path: app/src/main/assets/engine/
+          name: qemu-jniLibs-bundle
+          path: app/src/main/jniLibs/
 
-      - name: Verify Packaged Asset Structure
+      - name: Verify Packaged Asset & jniLibs Structure
         run: |
-          echo "=== App Raw Assets ==="
+          echo "=== App Raw Assets (Kernel) ==="
           ls -lh app/src/main/assets/kernel/
-          ls -la app/src/main/assets/engine/
-          ls -la app/src/main/assets/engine/lib/ || true
+          echo "=== App Native Libraries (jniLibs/arm64-v8a) ==="
+          ls -la app/src/main/jniLibs/arm64-v8a/
 
       - name: Run Unit Tests
         run: gradle testDebugUnitTest --stacktrace
@@ -195,14 +194,21 @@ jobs:
       - name: Build Debug APK
         run: gradle assembleDebug --stacktrace
 
-      - name: Install QEMU Runner for CI Verification
+      - name: Verify APK Native Libraries (lib/*.so)
+        run: |
+          echo "=== Inspecting Debug APK Contents for jniLibs ==="
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "lib/arm64-v8a/" || true
+
+      - name: Install QEMU Runner for Host Sanity Check
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-system-arm qemu-system-misc
 
-      - name: CI-Verified Real QEMU Kernel Boot Test
+      - name: Kernel Sanity Check via Host-Native QEMU (ARM64 Kernel Verification)
         run: |
-          echo "=== Executing Real QEMU Process with Built ARM64 Kernel ==="
+          echo "=== Running Kernel Sanity Check via Host-Native QEMU Runner ==="
+          echo "Note: This step verifies the built ARM64 Linux kernel Image using the host runner's native QEMU emulator."
+          echo "The bundled Android Bionic QEMU binary in jniLibs requires a physical ARM64 Android device with nativeLibraryDir execution."
           
           qemu-system-aarch64 \
             -M virt,gic-version=3 \
@@ -214,25 +220,25 @@ jobs:
             -display none \
             -monitor none \
             -serial stdio \
-            -no-reboot > real-qemu-boot.log 2>&1 &
+            -no-reboot > host-qemu-boot.log 2>&1 &
 
           QEMU_PID=$!
-          echo "Started QEMU process (PID $QEMU_PID). Collecting live serial console stream..."
+          echo "Started host QEMU process (PID $QEMU_PID). Collecting serial stream..."
           
           # Allow kernel to boot and stream PL011 UART logs
           sleep 20
           kill -9 $QEMU_PID || true
 
-          echo "=== Actual QEMU Serial Console Log Output ==="
-          cat real-qemu-boot.log
-          echo "============================================="
+          echo "=== Host QEMU Serial Console Log Output ==="
+          cat host-qemu-boot.log
+          echo "==========================================="
 
           # Assert genuine Linux kernel boot telemetry
           echo "Validating genuine kernel boot telemetry..."
-          grep -q "Booting Linux on physical CPU" real-qemu-boot.log || (echo "FATAL: Booting Linux banner not found in serial log" && exit 1)
-          grep -q "Linux version" real-qemu-boot.log || (echo "FATAL: Linux version banner not found in serial log" && exit 1)
-          grep -q "pl011" real-qemu-boot.log || (echo "FATAL: pl011 earlycon log not found in serial log" && exit 1)
-          echo "✓ Real QEMU process execution and serial console output verified!"
+          grep -q "Booting Linux on physical CPU" host-qemu-boot.log || (echo "FATAL: Booting Linux banner not found in serial log" && exit 1)
+          grep -q "Linux version" host-qemu-boot.log || (echo "FATAL: Linux version banner not found in serial log" && exit 1)
+          grep -q "pl011" host-qemu-boot.log || (echo "FATAL: pl011 earlycon log not found in serial log" && exit 1)
+          echo "✓ Kernel sanity check verified on host QEMU runner!"
 
       - name: Upload Test Reports
         if: always()
@@ -242,12 +248,12 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
           retention-days: 7
 
-      - name: Upload Real Boot Log Artifact
+      - name: Upload Host Kernel Boot Log Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-verified-boot-log
-          path: real-qemu-boot.log
+          name: ci-host-kernel-boot-log
+          path: host-qemu-boot.log
           retention-days: 14
 
       - name: Upload Debug APK Artifact
