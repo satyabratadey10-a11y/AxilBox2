@@ -70,12 +70,29 @@ for block in blocks:
 
 print(f" -> Indexed {len(packages)} packages from Termux repository.")
 
+# Helper to extract Depends from package metadata
+def get_package_depends(pkg_data):
+    depends_str = pkg_data.get("Depends", "")
+    if not depends_str:
+        return []
+    deps = []
+    for item in depends_str.split(","):
+        raw = item.strip()
+        if not raw:
+            continue
+        dep_name = re.sub(r'\(.*?\)', '', raw).strip()
+        if "|" in dep_name:
+            dep_name = dep_name.split("|")[0].strip()
+        if dep_name:
+            deps.append(dep_name)
+    return deps
+
 downloaded_packages = set()
 
 def download_and_extract_package(pkg_name):
     if pkg_name in downloaded_packages:
         return True
-    
+
     pkg_data = packages.get(pkg_name)
     if not pkg_data:
         alt = pkg_name[3:] if pkg_name.startswith("lib") else f"lib{pkg_name}"
@@ -158,8 +175,9 @@ def get_canonical_name(filename):
         canonical = canonical + ".so"
     return canonical
 
-# Precise mapping of library stems to official Termux package names
+# Mapping of library stems to official Termux package names
 KNOWN_LIB_MAP = {
+    "fdt": "dtc",
     "gnutls": "libgnutls",
     "nettle": "libnettle",
     "hogweed": "libnettle",
@@ -197,6 +215,8 @@ KNOWN_LIB_MAP = {
     "jpeg-turbo": "libjpeg-turbo",
     "bz2": "libbz2",
     "lzma": "liblzma",
+    "lzo": "liblzo",
+    "lzo2": "liblzo",
     "zstd": "zstd",
     "xml2": "libxml2",
     "slirp": "libslirp",
@@ -216,7 +236,21 @@ KNOWN_LIB_MAP = {
     "ssh": "libssh",
     "cap-ng": "libcap-ng",
     "fuse3": "libfuse3",
-    "vdeplug": "libvdeplug"
+    "vdeplug": "libvdeplug",
+    "nfs": "libnfs",
+    "usb": "libusb",
+    "usb-1.0": "libusb",
+    "usbredir": "libusbredir",
+    "usbredirparser": "libusbredir",
+    "spice": "libspice-server",
+    "spice-server": "libspice-server",
+    "pulse": "pulseaudio",
+    "pulse-simple": "pulseaudio",
+    "asound": "alsa-lib",
+    "dw": "libdw",
+    "elf": "libelf",
+    "ncurses": "ncurses",
+    "ncursesw": "ncurses"
 }
 
 def resolve_package_for_lib(needed_so, canon_name):
@@ -224,17 +258,14 @@ def resolve_package_for_lib(needed_so, canon_name):
     stem = re.sub(r'(\.so)(?:\.\d+)*$', '', stem)
     stem_no_num = re.sub(r'[-_]?\d+.*$', '', stem)
 
-    # 1. Exact / direct lookups in KNOWN_LIB_MAP
     for lookup in [needed_so, canon_name, stem, stem_no_num]:
         if lookup in KNOWN_LIB_MAP:
             return KNOWN_LIB_MAP[lookup]
 
-    # 2. Direct package index lookups
     for cand in [f"lib{stem}", stem, f"lib{stem_no_num}", stem_no_num]:
         if cand in packages:
             return cand
 
-    # 3. Search package index by prefix or contains
     for p_name in packages:
         if stem.lower() == p_name.lower() or f"lib{stem.lower()}" == p_name.lower():
             return p_name
@@ -268,9 +299,19 @@ def find_elf_providing(needed_so, canon_name):
 
     return None
 
-# 2. Download root package: qemu-system-aarch64-headless
-print(" -> Provisioning root package: qemu-system-aarch64-headless...")
-download_and_extract_package("qemu-system-aarch64-headless")
+# 2. Download package dependency closure tree
+print(" -> Provisioning QEMU package dependency tree...")
+pkg_queue = ["qemu-system-aarch64-headless", "glib", "libpixman", "libandroid-shmem", "libiconv", "pcre2", "libffi", "zlib", "libgnutls", "libnettle", "libgmp", "libtasn1", "p11-kit", "libunistring", "libidn2", "libc++", "dtc", "libpng", "libjpeg-turbo", "liblzo", "libbz2", "zstd", "libslirp"]
+
+while pkg_queue:
+    pkg_name = pkg_queue.pop(0)
+    if pkg_name in downloaded_packages:
+        continue
+    if download_and_extract_package(pkg_name):
+        pkg_data = packages.get(pkg_name, {})
+        for dep in get_package_depends(pkg_data):
+            if dep not in downloaded_packages and dep not in pkg_queue:
+                pkg_queue.append(dep)
 
 # Locate qemu-system-aarch64 executable
 qemu_bin = None
@@ -287,7 +328,7 @@ if not qemu_bin:
 
 print(f" -> Found QEMU binary at {qemu_bin}")
 
-# 3. Targeted Recursive Dependency Graph Resolution
+# 3. Targeted Recursive ELF DT_NEEDED Resolution
 print(" -> Running targeted recursive DT_NEEDED closure search from QEMU binary...")
 
 needed_queue = list(get_elf_needed(qemu_bin))
