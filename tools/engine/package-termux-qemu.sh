@@ -191,6 +191,19 @@ KNOWN_LIB_MAP = {
     "pcre2-posix": "pcre2",
     "ffi": "libffi",
     "z": "zlib",
+    "png": "libpng",
+    "png16": "libpng",
+    "jpeg": "libjpeg-turbo",
+    "jpeg-turbo": "libjpeg-turbo",
+    "bz2": "libbz2",
+    "lzma": "liblzma",
+    "zstd": "zstd",
+    "xml2": "libxml2",
+    "slirp": "libslirp",
+    "brotli": "brotli",
+    "brotlicommon": "brotli",
+    "brotlidec": "brotli",
+    "brotlienc": "brotli",
     "c++": "libc++",
     "c++_shared": "libc++",
     "android-support": "libandroid-support",
@@ -198,25 +211,38 @@ KNOWN_LIB_MAP = {
     "nghttp2": "libnghttp2",
     "ngtcp2": "libngtcp2",
     "ssl": "openssl",
-    "crypto": "openssl"
+    "crypto": "openssl",
+    "curl": "libcurl",
+    "ssh": "libssh",
+    "cap-ng": "libcap-ng",
+    "fuse3": "libfuse3",
+    "vdeplug": "libvdeplug"
 }
 
 def resolve_package_for_lib(needed_so, canon_name):
     stem = re.sub(r'^lib', '', needed_so)
     stem = re.sub(r'(\.so)(?:\.\d+)*$', '', stem)
-    stem_no_num = re.sub(r'[-_]\d+.*$', '', stem)
+    stem_no_num = re.sub(r'[-_]?\d+.*$', '', stem)
 
-    for lookup in [stem, stem_no_num, canon_name, needed_so]:
+    # 1. Exact / direct lookups in KNOWN_LIB_MAP
+    for lookup in [needed_so, canon_name, stem, stem_no_num]:
         if lookup in KNOWN_LIB_MAP:
             return KNOWN_LIB_MAP[lookup]
 
-    # Package index lookups
+    # 2. Direct package index lookups
     for cand in [f"lib{stem}", stem, f"lib{stem_no_num}", stem_no_num]:
         if cand in packages:
             return cand
 
+    # 3. Search package index by prefix or contains
     for p_name in packages:
-        if stem.lower() == p_name.lower():
+        if stem.lower() == p_name.lower() or f"lib{stem.lower()}" == p_name.lower():
+            return p_name
+        if stem_no_num and (stem_no_num.lower() == p_name.lower() or f"lib{stem_no_num.lower()}" == p_name.lower()):
+            return p_name
+
+    for p_name in packages:
+        if stem.lower() in p_name.lower():
             return p_name
 
     return None
