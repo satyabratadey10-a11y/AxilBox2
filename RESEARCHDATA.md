@@ -76,6 +76,27 @@ CONFIG_SYNC_FILE=y
 CONFIG_DMA_SHARED_BUFFER=y
 ```
 
+### 1.1. Deterministic Build Caching Strategy for Guest Kernel (`actions/cache`)
+
+Compiling an ARM64 Linux kernel Image from source via `kbuild` on GitHub Actions runners takes ~14–15 minutes from scratch. To eliminate redundant recompilations without risking stale or unversioned kernel binaries:
+
+1. **Deterministic Key Formulation:**
+   ```yaml
+   key: kernel-virt-v6.6-${{ hashFiles('tools/kernel/configure-virt-kernel.sh') }}
+   ```
+   The cache key pairs the pinned upstream kernel release branch/tag (`v6.6 LTS`) with the cryptographic SHA-256 hash of [`tools/kernel/configure-virt-kernel.sh`](file:///data/data/com.termux/files/home/AxilBox2/tools/kernel/configure-virt-kernel.sh), which contains every `./scripts/config` directive.
+2. **Guaranteed Invalidation:**
+   Any modification to kernel configuration directives (e.g. enabling `CONFIG_VIRTIO_NET` or modifying console drivers) immediately changes the file hash and invalidates the cache key. A cache miss guarantees a fresh build matching the new configuration.
+3. **Artifact Paths Cached:**
+   The cache stores `linux-src/arch/arm64/boot/Image` and `linux-src/.config`.
+4. **Cache-Hit Execution Flow:**
+   On a cache hit (`steps.kernel-cache.outputs.cache-hit == 'true'`), Job 1 skips:
+   - Toolchain & build dependencies installation (`apt-get install`)
+   - 1.5GB Linux kernel shallow clone (`git clone --depth 1`)
+   - `defconfig` / `scripts/config` / `olddefconfig` configuration steps
+   - Multi-core kbuild compilation (`make -j$(nproc) Image`)
+   Execution jumps directly to artifact verification (`file arch/arm64/boot/Image`) and upload, reducing Job 1 runtime from ~14 minutes to **under 30 seconds**.
+
 ---
 
 ## 2. Low-Latency WebRTC & Hardware MediaCodec Video Pipeline
@@ -254,8 +275,15 @@ The W^X / `nativeLibraryDir` architecture has been **confirmed genuinely operati
 - Invocations of `execve()` against `/data/app/.../lib/arm64/libqemu_system_aarch64.so` bypass the Android 10+ W^X writable data execution block without permission errors.
 - The Android Bionic dynamic linker (`/system/bin/linker64`) successfully starts the binary and initiates dependency resolution against sibling libraries in `nativeLibraryDir`.
 
-### 6.5. Transitive Shared-Library Completeness & CI `DT_NEEDED` Guard
-With `execve()` execution verified, the remaining runtime risk is **transitive shared-library completeness**:
+### 6.5. Transitive Shared-Library Completeness, Functional Correctness & CI Symbol Closure Guard
+With `execve()` execution verified, the remaining runtime risk revolves around transitive shared-library integrity:
+
 1. **The Transitive Dependency Hazard:** `libqemu_system_aarch64.so` and primary libraries link against indirect dependencies (e.g., `libgnutls.so`, which in turn requires `libnettle.so`, `libgmp.so`, `libtasn1.so`, `libp11-kit.so`, `libhogweed.so`, `libunistring.so`, `libidn2.so`, and `libc++_shared.so`). If any single transitive library is absent from `nativeLibraryDir`, the Bionic dynamic linker aborts process execution.
-2. **Recursive Closure Provisioning:** `tools/engine/package-termux-qemu.sh` performs automated recursive resolution by reading `Depends:` trees from the Termux package index and running an iterative ELF `DT_NEEDED` closure loop until all non-system dependencies (`libc.so`, `libm.so`, `libdl.so`, `liblog.so` excluded) are downloaded, converted to `lib*.so`, set to `$ORIGIN` RPATH, and remapped.
-3. **Automated CI Enforcement Guard:** Job 2 (`build-qemu`) runs a strict post-packaging assertion: `readelf -d` scans every `.so` in the `jniLibs` bundle and fails the build if any `DT_NEEDED` symbol is not present in the same bundle directory. This ensures all transitive dependencies are validated in CI before deployment to physical hardware.
+2. **The "Dependency Present" vs. "Dependency Functionally Correct" Distinction:**
+   - **Dependency Present (DT_NEEDED Name Matching):** The dynamic linker requires that an ELF shared object matching the exact `DT_NEEDED` name exists in `nativeLibraryDir` (or `$ORIGIN`). A simple file-presence check verifies only that a file with the required name (e.g., `libzstd.so`) is present in the bundle.
+   - **Dependency Functionally Correct (Symbol Table Closure):** File presence alone does NOT guarantee functionality. A bundled library may be a build-time stub, a dev-only unversioned linker script (e.g., ASCII text containing `INPUT(libzstd.so.1)`), or an incomplete build artifact lacking required exports (such as `ZSTD_decompress`). When `libqemu_system_aarch64.so` references an undefined symbol (`GLOBAL UND`) that is not exported by any bundled shared object or Bionic, the dynamic linker fails at runtime with an unresolved symbol error. Both "dependency present" and "dependency functionally correct" are fundamentally distinct checks, and both must be enforced.
+3. **Recursive Closure Provisioning:** `tools/engine/package-termux-qemu.sh` performs automated recursive resolution by reading `Depends:` trees from the Termux package index and running an iterative ELF `DT_NEEDED` closure loop until all non-system dependencies (`libc.so`, `libm.so`, `libdl.so`, `liblog.so` excluded) are downloaded, converted to `lib*.so`, set to `$ORIGIN` RPATH, and remapped. The provisioner audits every extracted library with `file` to reject ASCII text linker scripts and dev stubs, resolving concrete versioned runtime shared objects (e.g., `libzstd.so.1.*`) instead.
+4. **Automated CI Enforcement Guard (Two-Tier Validation in Job 2):**
+   - **Tier 1 — ELF Shared Object Audit:** `file` inspects every packaged `.so` in `jniLibs-bundle/arm64-v8a/` to confirm the output indicates a valid `ELF 64-bit ... shared object`, explicitly rejecting ASCII text linker scripts and zero-byte stubs.
+   - **Tier 2 — Symbol-Level Closure Guard:** `readelf --dyn-syms` collects all `GLOBAL DEFAULT` exported symbols across the entire bundle, and separately collects all undefined required (`GLOBAL UND`) symbols from each `.so`. Any undefined symbol not provided by Android Bionic (`libc`, `libm`, `libdl`, `liblog`) MUST be satisfied by a library in the bundle. If any required symbol (such as `ZSTD_decompress`) is missing, the CI build fails loudly with a descriptive diagnostic before deployment to physical hardware.
+

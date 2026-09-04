@@ -22,7 +22,20 @@ jobs:
       contents: read
 
     steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Restore Kernel Build Cache
+        id: kernel-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            linux-src/arch/arm64/boot/Image
+            linux-src/.config
+          key: kernel-virt-v6.6-${{ hashFiles('tools/kernel/configure-virt-kernel.sh') }}
+
       - name: Install Toolchain & Build Dependencies
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -37,64 +50,28 @@ jobs:
             file
 
       - name: Shallow Clone Linux Kernel (v6.6 LTS)
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 --branch v6.6 https://github.com/torvalds/linux.git linux-src
 
       - name: Configure Kernel for QEMU virt Machine (PLAN.md Stage 1)
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
         working-directory: linux-src
         run: |
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
-
-          # Serial & Earlycon Console
-          ./scripts/config --enable CONFIG_SERIAL_AMBA_PL011
-          ./scripts/config --enable CONFIG_SERIAL_AMBA_PL011_CONSOLE
-          ./scripts/config --enable CONFIG_SERIAL_EARLYCON
-          ./scripts/config --disable CONFIG_SERIAL_EARLYCON_ARM_SEMIHOST
-
-          # VirtIO Core & Transport
-          ./scripts/config --enable CONFIG_VIRTIO
-          ./scripts/config --enable CONFIG_VIRTIO_PCI
-          ./scripts/config --enable CONFIG_VIRTIO_PCI_MODERN
-          ./scripts/config --enable CONFIG_VIRTIO_MMIO
-          ./scripts/config --enable CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES
-
-          # VirtIO Storage
-          ./scripts/config --enable CONFIG_VIRTIO_BLK
-          ./scripts/config --enable CONFIG_EXT4_FS
-          ./scripts/config --enable CONFIG_EXT4_FS_POSIX_ACL
-          ./scripts/config --enable CONFIG_EXT4_FS_SECURITY
-
-          # Core Hardware & Addressing
-          ./scripts/config --enable CONFIG_ARM64_VA_BITS_48
-          ./scripts/config --enable CONFIG_ARM64_4K_PAGES
-          ./scripts/config --enable CONFIG_ARM64_GIC_V3
-          ./scripts/config --enable CONFIG_ARM64_GIC_V3_ITS
-          ./scripts/config --enable CONFIG_PCI
-          ./scripts/config --enable CONFIG_PCI_HOST_GENERIC
-          ./scripts/config --enable CONFIG_PCI_ECAM
-
-          # Logging & TTY
-          ./scripts/config --enable CONFIG_PRINTK
-          ./scripts/config --enable CONFIG_PRINTK_TIME
-          ./scripts/config --enable CONFIG_TTY
-
-          # Stage 1 Minimal: Disable virtio-gpu and virtio-input to keep scoped
-          ./scripts/config --disable CONFIG_DRM_VIRTIO_GPU
-          ./scripts/config --disable CONFIG_VIRTIO_INPUT
-          ./scripts/config --disable CONFIG_INPUT_EVDEV
-
+          bash ../tools/kernel/configure-virt-kernel.sh
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
       - name: Build ARM64 Kernel Image
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
         working-directory: linux-src
         run: |
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image
 
       - name: Verify Kernel Image Artifact
-        working-directory: linux-src
         run: |
-          ls -lh arch/arm64/boot/Image
-          file arch/arm64/boot/Image
+          ls -lh linux-src/arch/arm64/boot/Image
+          file linux-src/arch/arm64/boot/Image
 
       - name: Upload Kernel Image Artifact
         uses: actions/upload-artifact@v4
@@ -126,12 +103,49 @@ jobs:
         run: |
           bash tools/engine/package-termux-qemu.sh jniLibs-bundle/arm64-v8a
 
-      - name: Verify ELF Architecture & Linked Dependencies
+      - name: Audit ELF Shared Objects & Reject Linker Scripts / Stubs
         run: |
-          file jniLibs-bundle/arm64-v8a/libqemu_system_aarch64.so
-          aarch64-linux-gnu-readelf -h jniLibs-bundle/arm64-v8a/libqemu_system_aarch64.so
-          echo "=== jniLibs Bundle Contents ==="
-          ls -la jniLibs-bundle/arm64-v8a/
+          python3 - <<'EOF'
+          import os, sys, subprocess
+
+          bundle_dir = "jniLibs-bundle/arm64-v8a"
+          bundle_files = [f for f in sorted(os.listdir(bundle_dir)) if f.startswith("lib") and f.endswith(".so")]
+
+          print(f"=== Auditing {len(bundle_files)} bundle libraries with file and size checks ===")
+          invalid_files = []
+
+          for fname in bundle_files:
+              fpath = os.path.join(bundle_dir, fname)
+              size = os.path.getsize(fpath)
+              out = subprocess.check_output(["file", "-b", fpath], text=True, errors="ignore").strip()
+              print(f"  [{fname}] ({size} bytes): {out}")
+
+              # Confirm not near-zero-byte stub
+              if size < 1024:
+                  invalid_files.append((fname, f"near-zero-byte stub ({size} bytes)", out))
+                  continue
+
+              # Confirm not ASCII text or linker script
+              if "ASCII text" in out or "linker script" in out:
+                  invalid_files.append((fname, "ASCII text / linker script instead of ELF binary", out))
+                  continue
+
+              # Confirm output says ELF 64-bit and shared object (or executable for QEMU binary)
+              if "ELF 64-bit" not in out:
+                  invalid_files.append((fname, "not ELF 64-bit", out))
+                  continue
+              if "shared object" not in out and "executable" not in out:
+                  invalid_files.append((fname, "not an ELF shared object", out))
+                  continue
+
+          if invalid_files:
+              print("\nFATAL: Packaging defect detected! The following libraries are stubs or linker scripts:", file=sys.stderr)
+              for fname, reason, out in invalid_files:
+                  print(f"  - {fname}: {reason} (file: '{out}')", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"✓ All {len(bundle_files)} bundle files are verified genuine ELF 64-bit shared objects.")
+          EOF
 
       - name: Strict Transitive Dependency Assertion (DT_NEEDED Completeness)
         run: |
@@ -172,6 +186,184 @@ jobs:
               sys.exit(1)
 
           print("✓ 100% DT_NEEDED completeness verified: all transitive dependencies are present in the bundle.")
+          EOF
+
+      - name: Strict Dynamic Symbol-Level Closure Assertion (readelf --dyn-syms)
+        run: |
+          python3 - <<'EOF'
+          import os, sys, subprocess, re, glob
+
+          bundle_dir = "jniLibs-bundle/arm64-v8a"
+          bundle_files = [f for f in sorted(os.listdir(bundle_dir)) if f.startswith("lib") and f.endswith(".so")]
+          print(f"=== Dynamic Symbol-Level Closure Verification across {len(bundle_files)} bundle libraries ===")
+
+          readelf_bin = "aarch64-linux-gnu-readelf" if subprocess.run(["which", "aarch64-linux-gnu-readelf"], stdout=subprocess.DEVNULL).returncode == 0 else "readelf"
+
+          # 1. Discover Bionic-provided symbols from NDK sysroots and baseline patterns
+          bionic_libs = {"libc.so", "libm.so", "libdl.so", "liblog.so"}
+          bionic_symbols = set()
+
+          ndk_search_paths = [
+              "/usr/local/lib/android/sdk/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/*",
+              "/usr/local/lib/android/sdk/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android",
+              "/usr/local/lib/android/sdk/ndk/*/platforms/android-*/arch-arm64/usr/lib",
+              "/opt/android-sdk/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/*",
+              os.path.expanduser("~/Android/Sdk/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/*")
+          ]
+          ndk_dirs = []
+          for p in ndk_search_paths:
+              ndk_dirs.extend(glob.glob(p))
+
+          for ndk_dir in ndk_dirs:
+              for blib in bionic_libs:
+                  target = os.path.join(ndk_dir, blib)
+                  if os.path.exists(target):
+                      try:
+                          out = subprocess.check_output([readelf_bin, "--dyn-syms", target], text=True, errors="ignore")
+                          for line in out.splitlines():
+                              parts = line.strip().split()
+                              if len(parts) >= 8:
+                                  bind = parts[4]
+                                  vis = parts[5]
+                                  ndx = parts[6]
+                                  name = parts[7]
+                                  if bind in ("GLOBAL", "WEAK") and vis == "DEFAULT" and ndx not in ("UND", "UNDEF") and not ndx.startswith("UND"):
+                                      clean = re.sub(r'@+.*$', '', name)
+                                      if clean:
+                                          bionic_symbols.add(clean)
+                      except Exception as e:
+                          print(f"Note: Error reading NDK bionic lib {target}: {e}")
+
+          # Baseline Bionic system symbols (standard C/POSIX/libm/libdl/liblog)
+          STANDARD_BIONIC = {
+              "malloc", "calloc", "realloc", "free", "posix_memalign", "aligned_alloc", "valloc",
+              "printf", "fprintf", "sprintf", "snprintf", "vprintf", "vfprintf", "vsprintf", "vsnprintf",
+              "puts", "fputs", "putchar", "fputc", "getchar", "fgetc", "fgets", "fread", "fwrite", "feof", "ferror",
+              "fopen", "fdopen", "freopen", "fclose", "fflush", "fseek", "fseeko", "ftell", "ftello", "rewind",
+              "fileno", "clearerr", "setvbuf", "setbuf", "ungetc", "sscanf", "vsscanf", "scanf", "fscanf",
+              "memcpy", "memmove", "memset", "memcmp", "memchr", "memrchr", "memmem", "bzero", "bcopy",
+              "strlen", "strnlen", "strcpy", "strncpy", "strlcpy", "strcat", "strncat", "strlcat",
+              "strcmp", "strncmp", "strcasecmp", "strncasecmp", "strchr", "strrchr", "strstr", "strcasestr",
+              "strspn", "strcspn", "strpbrk", "strtok", "strtok_r", "strdup", "strndup", "strerror", "strerror_r",
+              "strcoll", "strxfrm", "strsignal",
+              "atoi", "atol", "atoll", "atof", "strtol", "strtoll", "strtoul", "strtoull", "strtof", "strtod", "strtold",
+              "isalnum", "isalpha", "iscntrl", "isdigit", "isgraph", "islower", "isprint", "ispunct", "isspace", "isupper", "isxdigit", "tolower", "toupper",
+              "sin", "sinf", "cos", "cosf", "tan", "tanf", "asin", "asinf", "acos", "acosf", "atan", "atanf", "atan2", "atan2f",
+              "sinh", "sinhf", "cosh", "coshf", "tanh", "tanhf", "exp", "expf", "exp2", "exp2f", "log", "logf", "log2", "log2f", "log10", "log10f",
+              "pow", "powf", "sqrt", "sqrtf", "cbrt", "cbrtf", "hypot", "hypotf", "ceil", "ceilf", "floor", "floorf", "trunc", "truncf",
+              "round", "roundf", "rint", "rintf", "nearbyint", "nearbyintf", "fabs", "fabsf", "fmod", "fmodf", "remainder", "remainderf",
+              "fmax", "fmaxf", "fmin", "fminf", "fdim", "fdimf", "isnan", "isinf", "isfinite", "fpclassify", "signbit", "ldexp", "ldexpf", "frexp", "frexpf", "modf", "modff",
+              "wcslen", "wcscpy", "wcsncpy", "wcscat", "wcsncat", "wcscmp", "wcsncmp", "wcschr", "wcsrchr", "wcsstr", "wmemchr", "wmemcmp", "wmemcpy", "wmemmove", "wmemset", "mbstowcs", "wcstombs", "mbtowc", "wctomb",
+              "open", "openat", "creat", "close", "read", "write", "pread", "pread64", "pwrite", "pwrite64",
+              "lseek", "lseek64", "dup", "dup2", "dup3", "pipe", "pipe2", "fcntl", "ioctl",
+              "stat", "fstat", "lstat", "fstatat", "stat64", "fstat64", "lstat64", "statfs", "fstatfs", "statvfs",
+              "access", "faccessat", "chmod", "fchmod", "fchmodat", "chown", "fchown", "fchownat", "unlink", "unlinkat",
+              "mkdir", "mkdirat", "rmdir", "rename", "renameat", "renameat2", "link", "linkat", "symlink", "symlinkat",
+              "readlink", "readlinkat", "truncate", "ftruncate", "truncate64", "ftruncate64",
+              "mmap", "mmap64", "munmap", "mprotect", "msync", "madvise", "posix_madvise", "mlock", "munlock",
+              "poll", "ppoll", "select", "pselect", "epoll_create", "epoll_create1", "epoll_ctl", "epoll_wait", "epoll_pwait",
+              "eventfd", "signalfd", "timerfd_create", "timerfd_settime", "timerfd_gettime",
+              "getopt", "getopt_long", "getopt_long_only", "optarg", "optind", "opterr", "optopt",
+              "socket", "socketpair", "bind", "listen", "accept", "accept4", "connect", "getsockname", "getpeername",
+              "send", "sendto", "sendmsg", "recv", "recvfrom", "recvmsg", "shutdown", "getsockopt", "setsockopt",
+              "getaddrinfo", "freeaddrinfo", "getnameinfo", "gai_strerror", "inet_addr", "inet_aton", "inet_ntoa", "inet_pton", "inet_ntop",
+              "gethostbyname", "gethostbyaddr", "sethostent", "endhostent",
+              "pthread_create", "pthread_exit", "pthread_join", "pthread_detach", "pthread_self", "pthread_equal",
+              "pthread_mutex_init", "pthread_mutex_destroy", "pthread_mutex_lock", "pthread_mutex_unlock", "pthread_mutex_trylock", "pthread_mutex_timedlock",
+              "pthread_mutexattr_init", "pthread_mutexattr_destroy", "pthread_mutexattr_settype", "pthread_mutexattr_gettype",
+              "pthread_cond_init", "pthread_cond_destroy", "pthread_cond_wait", "pthread_cond_timedwait", "pthread_cond_signal", "pthread_cond_broadcast",
+              "pthread_condattr_init", "pthread_condattr_destroy",
+              "pthread_rwlock_init", "pthread_rwlock_destroy", "pthread_rwlock_rdlock", "pthread_rwlock_wrlock", "pthread_rwlock_unlock",
+              "pthread_key_create", "pthread_key_delete", "pthread_getspecific", "pthread_setspecific", "pthread_once",
+              "pthread_attr_init", "pthread_attr_destroy", "pthread_attr_setstacksize", "pthread_attr_getstacksize", "pthread_attr_setdetachstate",
+              "pthread_setname_np", "pthread_getname_np", "pthread_sigmask", "pthread_kill",
+              "sem_init", "sem_destroy", "sem_wait", "sem_trywait", "sem_timedwait", "sem_post", "sem_getvalue",
+              "sigaction", "signal", "sigprocmask", "sigsuspend", "sigpending", "sigemptyset", "sigfillset", "sigaddset", "sigdelset", "sigismember",
+              "kill", "raise", "abort", "exit", "_exit", "_Exit", "quick_exit", "atexit", "at_quick_exit",
+              "getenv", "setenv", "unsetenv", "putenv", "clearenv",
+              "fork", "vfork", "execve", "execv", "execvp", "execvpe", "wait", "waitpid", "waitid",
+              "getpid", "getppid", "getuid", "geteuid", "getgid", "getegid", "setuid", "setgid", "seteuid", "setegid",
+              "getgroups", "setgroups", "getpgrp", "setpgrp", "getpgid", "setpgid", "setsid", "getsid",
+              "gettimeofday", "settimeofday", "time", "clock_gettime", "clock_settime", "clock_getres", "clock_nanosleep", "nanosleep",
+              "localtime", "localtime_r", "gmtime", "gmtime_r", "mktime", "asctime", "ctime", "strftime", "strptime",
+              "dlopen", "dlclose", "dlsym", "dlerror", "dladdr", "dl_iterate_phdr",
+              "__android_log_print", "__android_log_write", "__android_log_vprint", "__android_log_assert", "__android_log_buf_print",
+              "__cxa_finalize", "__cxa_atexit", "__register_atfork", "__stack_chk_guard", "__stack_chk_fail",
+              "__errno", "errno", "__sF", "__get_tls", "__system_property_get", "__system_property_read",
+              "__gxx_personality_v0", "_Unwind_Resume", "_Unwind_RaiseException", "_Unwind_GetIP", "_Unwind_SetIP"
+          }
+          bionic_symbols.update(STANDARD_BIONIC)
+          print(f" -> Total Bionic reference symbols recognized: {len(bionic_symbols)}")
+
+          # 2. Collect GLOBAL/WEAK DEFAULT exported symbols across bundle
+          bundle_exports = set()
+          export_origins = {}
+
+          for fname in bundle_files:
+              fpath = os.path.join(bundle_dir, fname)
+              try:
+                  out = subprocess.check_output([readelf_bin, "--dyn-syms", fpath], text=True, errors="ignore")
+              except Exception as e:
+                  print(f"Error reading dynsyms for {fname}: {e}", file=sys.stderr)
+                  sys.exit(1)
+
+              for line in out.splitlines():
+                  parts = line.strip().split()
+                  if len(parts) >= 8:
+                      bind = parts[4]
+                      vis = parts[5]
+                      ndx = parts[6]
+                      name = parts[7]
+                      if bind in ("GLOBAL", "WEAK") and vis == "DEFAULT" and ndx not in ("UND", "UNDEF") and not ndx.startswith("UND"):
+                          clean_name = re.sub(r'@+.*$', '', name)
+                          if clean_name:
+                              bundle_exports.add(clean_name)
+                              bundle_exports.add(name)
+                              export_origins.setdefault(clean_name, []).append(fname)
+
+          print(f" -> Indexed {len(bundle_exports)} unique exported symbols across bundle.")
+
+          # 3. Collect UND (undefined/required) symbols and verify symbol-level closure
+          unsatisfied = {}
+
+          for fname in bundle_files:
+              fpath = os.path.join(bundle_dir, fname)
+              try:
+                  out = subprocess.check_output([readelf_bin, "--dyn-syms", fpath], text=True, errors="ignore")
+              except Exception as e:
+                  print(f"Error reading dynsyms for {fname}: {e}", file=sys.stderr)
+                  sys.exit(1)
+
+              for line in out.splitlines():
+                  parts = line.strip().split()
+                  if len(parts) >= 8:
+                      bind = parts[4]
+                      ndx = parts[6]
+                      name = parts[7]
+                      if (ndx in ("UND", "UNDEF") or ndx.startswith("UND")) and bind == "GLOBAL":
+                          clean_name = re.sub(r'@+.*$', '', name)
+                          if not clean_name:
+                              continue
+                          if clean_name in bionic_symbols or name in bionic_symbols:
+                              continue
+                          if clean_name in bundle_exports or name in bundle_exports:
+                              continue
+                          if clean_name.startswith("__android") or clean_name.startswith("__isoc") or clean_name.startswith("__bionic"):
+                              continue
+                          unsatisfied.setdefault(fname, set()).add(clean_name)
+
+          if unsatisfied:
+              print("\n==================================================================", file=sys.stderr)
+              print("FATAL: Symbol-level closure verification FAILED!", file=sys.stderr)
+              print("The following required symbols are NOT satisfied by any library in the bundle or Bionic:", file=sys.stderr)
+              for fname, syms in sorted(unsatisfied.items()):
+                  print(f"\n  Library [{fname}] requires {len(syms)} unsatisfied symbol(s):", file=sys.stderr)
+                  for s in sorted(syms):
+                      print(f"    - {s}", file=sys.stderr)
+              print("==================================================================", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"✓ 100% Symbol-level closure verified across all {len(bundle_files)} native libraries!")
           EOF
 
       - name: Upload QEMU jniLibs Bundle Artifact
