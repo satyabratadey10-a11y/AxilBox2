@@ -131,15 +131,45 @@ def download_and_extract_package(pkg_name):
         print(f"   Error downloading/extracting {pkg_name}: {e}", file=sys.stderr)
         return False
 
-def is_elf_file(filepath):
+def is_real_elf_shared_object(filepath, allow_executable=False):
     if not os.path.isfile(filepath):
         return False
+    # Reject near-zero-byte stubs
     try:
-        with open(filepath, "rb") as f:
-            magic = f.read(4)
-            return magic == b"\x7fELF"
+        if os.path.getsize(filepath) < 1024:
+            return False
     except Exception:
         return False
+
+    # Check 64-bit ELF magic bytes (EI_CLASS == 2 for ELFCLASS64)
+    try:
+        with open(filepath, "rb") as f:
+            magic = f.read(5)
+            if len(magic) < 5 or magic[:4] != b"\x7fELF" or magic[4] != 2:
+                return False
+    except Exception:
+        return False
+
+    # Validate using file -b to ensure not ASCII text or build linker script
+    try:
+        out = subprocess.check_output(["file", "-b", filepath], text=True, errors="ignore").strip()
+        if "ASCII text" in out or "linker script" in out:
+            return False
+        if "ELF 64-bit" not in out:
+            return False
+        if allow_executable:
+            if "shared object" not in out and "executable" not in out:
+                return False
+        else:
+            if "shared object" not in out:
+                return False
+    except Exception:
+        return False
+
+    return True
+
+def is_elf_file(filepath):
+    return is_real_elf_shared_object(filepath, allow_executable=True)
 
 def get_elf_needed(filepath):
     try:
@@ -279,23 +309,33 @@ def resolve_package_for_lib(needed_so, canon_name):
     return None
 
 def find_elf_providing(needed_so, canon_name):
+    candidates = []
     for root, dirs, files in os.walk(work_dir):
         for f in files:
             full_p = os.path.join(root, f)
-            if os.path.islink(full_p):
-                continue
-            if not is_elf_file(full_p):
+            real_p = os.path.realpath(full_p)
+            if not is_real_elf_shared_object(real_p, allow_executable=False):
                 continue
 
             bname = os.path.basename(full_p)
+            real_bname = os.path.basename(real_p)
             cname = get_canonical_name(bname)
+            soname = get_elf_soname(real_p)
 
-            if bname == needed_so or cname == canon_name or bname.startswith(canon_name):
-                return full_p
+            # Priority 1: Exact match on needed_so (e.g. libzstd.so.1)
+            if bname == needed_so or real_bname == needed_so or (soname and soname == needed_so):
+                candidates.append((1, real_p))
+            # Priority 2: Versioned runtime binary (e.g. soname matches canon or versioned filename)
+            elif (soname and get_canonical_name(soname) == canon_name) or real_bname.startswith(f"{canon_name}."):
+                candidates.append((2, real_p))
+            # Priority 3: General canon_name match (only if genuine ELF shared object)
+            elif bname == canon_name or cname == canon_name or bname.startswith(canon_name):
+                candidates.append((3, real_p))
 
-            soname = get_elf_soname(full_p)
-            if soname and (soname == needed_so or get_canonical_name(soname) == canon_name):
-                return full_p
+    if candidates:
+        # Sort by priority (lowest number first) then by file size descending (prefer full runtime library over stubs)
+        candidates.sort(key=lambda x: (x[0], -os.path.getsize(x[1])))
+        return candidates[0][1]
 
     return None
 
@@ -410,7 +450,32 @@ for so_path in all_output_sos:
             except Exception as e:
                 print(f"Warning: Failed to replace needed {needed} in {fname}: {e}", file=sys.stderr)
 
-# 6. Strict completeness validation
+# 6. Strict completeness and symbol-level closure validation
+print("=== Strict Package Completeness & ELF Format Audit ===")
+
+# Audit every file in output_dir using file and size checks
+invalid_bundle_files = []
+for fname in sorted(os.listdir(output_dir)):
+    fpath = os.path.join(output_dir, fname)
+    size = os.path.getsize(fpath)
+    file_desc = subprocess.check_output(["file", "-b", fpath], text=True, errors="ignore").strip()
+    print(f"  * [{fname}] ({size} bytes): {file_desc}")
+
+    if size < 1024:
+        invalid_bundle_files.append((fname, f"near-zero-byte stub ({size} bytes)", file_desc))
+    elif "ASCII text" in file_desc or "linker script" in file_desc:
+        invalid_bundle_files.append((fname, "ASCII text / linker script instead of ELF binary", file_desc))
+    elif "ELF 64-bit" not in file_desc:
+        invalid_bundle_files.append((fname, "not ELF 64-bit", file_desc))
+    elif "shared object" not in file_desc and "executable" not in file_desc:
+        invalid_bundle_files.append((fname, "neither shared object nor executable", file_desc))
+
+if invalid_bundle_files:
+    print(f"FATAL: {len(invalid_bundle_files)} packaged libraries failed ELF audit:", file=sys.stderr)
+    for fname, reason, desc in invalid_bundle_files:
+        print(f"  - {fname}: {reason} ('{desc}')", file=sys.stderr)
+    sys.exit(1)
+
 print("=== Strict DT_NEEDED Completeness Verification ===")
 missing_total = 0
 available_bundle_sos = set(os.listdir(output_dir))
@@ -430,7 +495,32 @@ if missing_total > 0:
     print(f"FATAL: {missing_total} unsatisfied transitive dependencies detected!", file=sys.stderr)
     sys.exit(1)
 
-print(f"✓ All {len(available_bundle_sos)} native libraries are 100% self-contained and satisfy all DT_NEEDED dependencies!")
+print("=== Strict Dynamic Symbol Export Verification ===")
+readelf_bin = "aarch64-linux-gnu-readelf" if subprocess.run(["which", "aarch64-linux-gnu-readelf"], stdout=subprocess.DEVNULL).returncode == 0 else "readelf"
+
+empty_dynsyms = []
+for fname in sorted(available_bundle_sos):
+    if fname == "libqemu_system_aarch64.so":
+        continue
+    fpath = os.path.join(output_dir, fname)
+    try:
+        out = subprocess.check_output([readelf_bin, "-W", "--dyn-syms", fpath], text=True, errors="ignore")
+        has_exports = False
+        for line in out.splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 8 and parts[4] in ("GLOBAL", "WEAK") and parts[5] == "DEFAULT" and parts[6] not in ("UND", "UNDEF") and not parts[6].startswith("UND"):
+                has_exports = True
+                break
+        if not has_exports:
+            empty_dynsyms.append(fname)
+    except Exception as e:
+        print(f"Warning inspecting dynsyms on {fname}: {e}", file=sys.stderr)
+
+if empty_dynsyms:
+    print(f"FATAL: The following libraries have empty dynamic symbol export tables (stubs): {empty_dynsyms}", file=sys.stderr)
+    sys.exit(1)
+
+print(f"✓ All {len(available_bundle_sos)} native libraries are 100% self-contained, ELF-audited, and functionally complete!")
 PY_SCRIPT
 
 echo "=== Verified Output Directory (${OUTPUT_DIR}) ==="

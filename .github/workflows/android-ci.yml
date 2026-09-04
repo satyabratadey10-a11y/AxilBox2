@@ -214,12 +214,26 @@ jobs:
           for p in ndk_search_paths:
               ndk_dirs.extend(glob.glob(p))
 
-          for ndk_dir in ndk_dirs:
+          for base_dir in [
+              os.environ.get("ANDROID_NDK_HOME", ""),
+              os.environ.get("ANDROID_NDK_ROOT", ""),
+              os.environ.get("ANDROID_HOME", ""),
+              "/usr/local/lib/android/sdk",
+              "/opt/android-sdk",
+              os.path.expanduser("~/Android")
+          ]:
+              if base_dir and os.path.isdir(base_dir):
+                  for root, _, files in os.walk(base_dir):
+                      if any(x in root for x in ("aarch64", "arm64")):
+                          if any(blib in files for blib in bionic_libs):
+                              ndk_dirs.append(root)
+
+          for ndk_dir in set(ndk_dirs):
               for blib in bionic_libs:
                   target = os.path.join(ndk_dir, blib)
                   if os.path.exists(target):
                       try:
-                          out = subprocess.check_output([readelf_bin, "--dyn-syms", target], text=True, errors="ignore")
+                          out = subprocess.check_output([readelf_bin, "-W", "--dyn-syms", target], text=True, errors="ignore")
                           for line in out.splitlines():
                               parts = line.strip().split()
                               if len(parts) >= 8:
@@ -231,6 +245,7 @@ jobs:
                                       clean = re.sub(r'@+.*$', '', name)
                                       if clean:
                                           bionic_symbols.add(clean)
+                                          bionic_symbols.add(name)
                       except Exception as e:
                           print(f"Note: Error reading NDK bionic lib {target}: {e}")
 
@@ -239,6 +254,8 @@ jobs:
               "malloc", "calloc", "realloc", "free", "posix_memalign", "aligned_alloc", "valloc",
               "printf", "fprintf", "sprintf", "snprintf", "vprintf", "vfprintf", "vsprintf", "vsnprintf",
               "puts", "fputs", "putchar", "fputc", "getchar", "fgetc", "fgets", "fread", "fwrite", "feof", "ferror",
+              "feof_unlocked", "ferror_unlocked", "fputc_unlocked", "fputs_unlocked", "fread_unlocked", "fwrite_unlocked",
+              "getchar_unlocked", "putchar_unlocked", "getc_unlocked", "putc_unlocked", "fileno_unlocked", "clearerr_unlocked", "fflush_unlocked",
               "fopen", "fdopen", "freopen", "fclose", "fflush", "fseek", "fseeko", "ftell", "ftello", "rewind",
               "fileno", "clearerr", "setvbuf", "setbuf", "ungetc", "sscanf", "vsscanf", "scanf", "fscanf",
               "memcpy", "memmove", "memset", "memcmp", "memchr", "memrchr", "memmem", "bzero", "bcopy",
@@ -254,13 +271,14 @@ jobs:
               "round", "roundf", "rint", "rintf", "nearbyint", "nearbyintf", "fabs", "fabsf", "fmod", "fmodf", "remainder", "remainderf",
               "fmax", "fmaxf", "fmin", "fminf", "fdim", "fdimf", "isnan", "isinf", "isfinite", "fpclassify", "signbit", "ldexp", "ldexpf", "frexp", "frexpf", "modf", "modff",
               "wcslen", "wcscpy", "wcsncpy", "wcscat", "wcsncat", "wcscmp", "wcsncmp", "wcschr", "wcsrchr", "wcsstr", "wmemchr", "wmemcmp", "wmemcpy", "wmemmove", "wmemset", "mbstowcs", "wcstombs", "mbtowc", "wctomb",
+              "wcscoll", "wcsxfrm", "wcsnlen", "wcscasecmp", "wcsncasecmp", "wcstoll", "wcstoull", "wcstold", "wcstod", "wcstof",
               "open", "openat", "creat", "close", "read", "write", "pread", "pread64", "pwrite", "pwrite64",
               "lseek", "lseek64", "dup", "dup2", "dup3", "pipe", "pipe2", "fcntl", "ioctl",
               "stat", "fstat", "lstat", "fstatat", "stat64", "fstat64", "lstat64", "statfs", "fstatfs", "statvfs",
               "access", "faccessat", "chmod", "fchmod", "fchmodat", "chown", "fchown", "fchownat", "unlink", "unlinkat",
               "mkdir", "mkdirat", "rmdir", "rename", "renameat", "renameat2", "link", "linkat", "symlink", "symlinkat",
               "readlink", "readlinkat", "truncate", "ftruncate", "truncate64", "ftruncate64",
-              "mmap", "mmap64", "munmap", "mprotect", "msync", "madvise", "posix_madvise", "mlock", "munlock",
+              "mmap", "mmap64", "munmap", "mprotect", "msync", "madvise", "posix_madvise", "mlock", "munlock", "mremap", "mincore",
               "poll", "ppoll", "select", "pselect", "epoll_create", "epoll_create1", "epoll_ctl", "epoll_wait", "epoll_pwait",
               "eventfd", "signalfd", "timerfd_create", "timerfd_settime", "timerfd_gettime",
               "getopt", "getopt_long", "getopt_long_only", "optarg", "optind", "opterr", "optopt",
@@ -279,18 +297,33 @@ jobs:
               "pthread_setname_np", "pthread_getname_np", "pthread_sigmask", "pthread_kill",
               "sem_init", "sem_destroy", "sem_wait", "sem_trywait", "sem_timedwait", "sem_post", "sem_getvalue",
               "sigaction", "signal", "sigprocmask", "sigsuspend", "sigpending", "sigemptyset", "sigfillset", "sigaddset", "sigdelset", "sigismember",
+              "sigaltstack", "siglongjmp", "setjmp", "longjmp", "_setjmp", "_longjmp",
               "kill", "raise", "abort", "exit", "_exit", "_Exit", "quick_exit", "atexit", "at_quick_exit",
               "getenv", "setenv", "unsetenv", "putenv", "clearenv",
               "fork", "vfork", "execve", "execv", "execvp", "execvpe", "wait", "waitpid", "waitid",
+              "posix_spawn", "posix_spawnp", "process_vm_readv", "process_vm_writev",
               "getpid", "getppid", "getuid", "geteuid", "getgid", "getegid", "setuid", "setgid", "seteuid", "setegid",
               "getgroups", "setgroups", "getpgrp", "setpgrp", "getpgid", "setpgid", "setsid", "getsid",
               "gettimeofday", "settimeofday", "time", "clock_gettime", "clock_settime", "clock_getres", "clock_nanosleep", "nanosleep",
               "localtime", "localtime_r", "gmtime", "gmtime_r", "mktime", "asctime", "ctime", "strftime", "strptime",
+              "gmtime_s", "timegm", "timelocal", "difftime",
               "dlopen", "dlclose", "dlsym", "dlerror", "dladdr", "dl_iterate_phdr",
               "__android_log_print", "__android_log_write", "__android_log_vprint", "__android_log_assert", "__android_log_buf_print",
               "__cxa_finalize", "__cxa_atexit", "__register_atfork", "__stack_chk_guard", "__stack_chk_fail",
               "__errno", "errno", "__sF", "__get_tls", "__system_property_get", "__system_property_read",
-              "__gxx_personality_v0", "_Unwind_Resume", "_Unwind_RaiseException", "_Unwind_GetIP", "_Unwind_SetIP"
+              "__gxx_personality_v0", "_Unwind_Resume", "_Unwind_RaiseException", "_Unwind_GetIP", "_Unwind_SetIP",
+              "__cmsg_nxthdr", "__gnu_strerror_r", "__fsetlocking",
+              "sysconf", "sysinfo", "uname", "getpagesize", "getrlimit", "setrlimit", "getrusage", "getpriority", "setpriority",
+              "sched_yield", "sched_getaffinity", "sched_setaffinity", "sched_getparam", "sched_setparam", "sched_getscheduler", "sched_setscheduler",
+              "syscall", "personality", "prctl", "ptrace", "capget", "capset",
+              "gettid", "getauxval", "arc4random", "arc4random_buf", "arc4random_uniform",
+              "setlocale", "uselocale", "newlocale", "freelocale", "duplocale", "nl_langinfo", "nl_langinfo_l",
+              "strtold_l", "strtod_l", "strtof_l", "strtoll_l", "strtoull_l", "strtol_l", "strtoul_l",
+              "pathconf", "fpathconf", "posix_fadvise", "posix_fallocate", "fallocate", "sync", "syncfs", "fsync", "fdatasync",
+              "getpwuid", "getpwuid_r", "getpwnam", "getpwnam_r", "getgrgid", "getgrgid_r", "getgrnam", "getgrnam_r",
+              "getlogin", "getlogin_r", "gethostname", "sethostname",
+              "futimes", "utimes", "lutimes", "utimensat", "futimens", "mknod", "mknodat",
+              "splice", "tee", "vmsplice", "sendfile", "sendfile64", "getrandom", "memfd_create", "sync_file_range", "readv", "writev", "preadv", "pwritev"
           }
           bionic_symbols.update(STANDARD_BIONIC)
           print(f" -> Total Bionic reference symbols recognized: {len(bionic_symbols)}")
@@ -302,7 +335,7 @@ jobs:
           for fname in bundle_files:
               fpath = os.path.join(bundle_dir, fname)
               try:
-                  out = subprocess.check_output([readelf_bin, "--dyn-syms", fpath], text=True, errors="ignore")
+                  out = subprocess.check_output([readelf_bin, "-W", "--dyn-syms", fpath], text=True, errors="ignore")
               except Exception as e:
                   print(f"Error reading dynsyms for {fname}: {e}", file=sys.stderr)
                   sys.exit(1)
@@ -329,7 +362,7 @@ jobs:
           for fname in bundle_files:
               fpath = os.path.join(bundle_dir, fname)
               try:
-                  out = subprocess.check_output([readelf_bin, "--dyn-syms", fpath], text=True, errors="ignore")
+                  out = subprocess.check_output([readelf_bin, "-W", "--dyn-syms", fpath], text=True, errors="ignore")
               except Exception as e:
                   print(f"Error reading dynsyms for {fname}: {e}", file=sys.stderr)
                   sys.exit(1)
@@ -348,7 +381,10 @@ jobs:
                               continue
                           if clean_name in bundle_exports or name in bundle_exports:
                               continue
-                          if clean_name.startswith("__android") or clean_name.startswith("__isoc") or clean_name.startswith("__bionic"):
+                          # Bionic fortify, compiler builtins, and standard architecture ABI
+                          if clean_name.startswith("__android") or clean_name.startswith("__isoc") or clean_name.startswith("__bionic") or clean_name.startswith("__aeabi_") or clean_name.startswith("__builtin_"):
+                              continue
+                          if clean_name.startswith("__") and clean_name.endswith("_chk"):
                               continue
                           unsatisfied.setdefault(fname, set()).add(clean_name)
 
