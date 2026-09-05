@@ -287,3 +287,37 @@ With `execve()` execution verified, the remaining runtime risk revolves around t
    - **Tier 1 — ELF Shared Object Audit:** `file` inspects every packaged `.so` in `jniLibs-bundle/arm64-v8a/` to confirm the output indicates a valid `ELF 64-bit ... shared object`, explicitly rejecting ASCII text linker scripts and zero-byte stubs.
    - **Tier 2 — Symbol-Level Closure Guard:** `readelf --dyn-syms` collects all `GLOBAL DEFAULT` exported symbols across the entire bundle, and separately collects all undefined required (`GLOBAL UND`) symbols from each `.so`. Any undefined symbol not provided by Android Bionic (`libc`, `libm`, `libdl`, `liblog`) MUST be satisfied by a library in the bundle. If any required symbol (such as `ZSTD_decompress`) is missing, the CI build fails loudly with a descriptive diagnostic before deployment to physical hardware.
 
+### 6.6. Tripartite Asset Architecture & QEMU Firmware/Option-ROM Resolution (`pc-bios`)
+
+Once the Android 10+ W^X execution restriction is resolved and dynamic symbol closure is satisfied, process launching reveals a third distinct dependency category beyond native executables and the guest kernel Image: **runtime non-executable firmware data files (option-ROMs)**.
+
+#### The Three Asset Classes in AxilBox
+1. **Class 1: Native Executable Code (Binaries & Shared Libraries)**
+   - **Artifacts:** `libqemu_system_aarch64.so`, `libglib-2.0.so`, `libpixman-1.so`, etc.
+   - **Location:** `app/src/main/jniLibs/arm64-v8a/` -> installed to `context.applicationInfo.nativeLibraryDir`.
+   - **Execution Model:** Direct `execve()` invocation. Exempt from Android 10+ W^X restrictions because the OS mounts `nativeLibraryDir` with read-execute (`r-x`) permissions.
+2. **Class 2: Guest Kernel & Boot Images**
+   - **Artifacts:** `Image` (ARM64 virt Linux kernel), `initrd`, disk images (`rootfs.ext4`).
+   - **Location:** `app/src/main/assets/kernel/` -> extracted to `context.filesDir/kernel/`.
+   - **Execution Model:** Read as plain data by QEMU's `-kernel` / `-initrd` loader.
+3. **Class 3: Runtime Non-Executable Firmware & Option-ROM Files**
+   - **Artifacts:** QEMU `pc-bios` firmware/ROMs: `efi-virtio.rom`, `efi-e1000.rom`, `efi-e1000e.rom`, `edk2-*.fd`, `keymaps/`, etc.
+   - **Location:** `app/src/main/assets/engine/pc-bios/` -> extracted to `context.filesDir/engine/pc-bios/`.
+   - **Execution Model:** Read into memory by QEMU's internal romloader via standard file I/O (`open`/`read`/`mmap`) during device initialization.
+
+#### Why Option-ROMs Belong in `assets/`, NOT `jniLibs/`
+- **W^X Exemption Scope:** The Android 10+ W^X security restriction only targets writable pages marked executable (`PROT_EXEC`) and `execve()` calls on writable storage. Non-executable data files loaded via `read()` do not require `nativeLibraryDir` placement.
+- **AGP Packaging Constraint:** Android Gradle Plugin (AGP) strictly enforces that files in `jniLibs` must follow the `lib<name>.so` shared object pattern. Plain `.rom`, `.bin`, `.fd`, and keymap directory hierarchies cannot be placed in `jniLibs` without violating AGP packaging rules.
+- **Clean Separation:** Storing Option-ROMs in `assets/engine/pc-bios/` guarantees they extract to app-private storage (`context.filesDir/engine/pc-bios/`) without polluting the system dynamic linker search space.
+
+#### Root Cause of `failed to find romfile "efi-virtio.rom"` & The `-L` Switch
+- **Compiled-in Path Mismatch:** When QEMU initializes VirtIO devices (`virtio-blk-pci`, `virtio-net-pci`, `virtio-gpu-pci`), it automatically attempts to load default PCI Option-ROMs (specifically `efi-virtio.rom`). Upstream Termux QEMU is compiled with a default data prefix hardcoded to `/data/data/com.termux/files/usr/share/qemu`. On standard Android devices running AxilBox (`com.axilbox.app`), this directory does not exist, causing QEMU's romloader to fail with:
+  ```text
+  qemu-system-aarch64: failed to find romfile "efi-virtio.rom"
+  ```
+- **The `-L` Resolution Mechanism:** QEMU provides the `-L <dir>` command-line option to override the compiled-in search path for BIOS, VGA BIOS, Option-ROMs, and keymaps. `EngineProvisioner.buildQemuArgs()` and `QemuProcessRunner` explicitly inject:
+  ```text
+  -L <context.filesDir>/engine/pc-bios
+  ```
+  allowing QEMU to resolve `efi-virtio.rom` and all subsequent device ROMs from the extracted asset directory on Android storage.
+- **Sourcing & CI Enforcement:** The full `pc-bios` tree is extracted directly from the Termux `qemu-common` package alongside `qemu-system-aarch64-headless` in `tools/engine/package-termux-qemu.sh`. Job 2 strictly asserts the presence and non-zero byte size of required default ROMs (`efi-virtio.rom`, `efi-e1000.rom`) before assembling the APK.

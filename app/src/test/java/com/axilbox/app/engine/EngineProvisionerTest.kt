@@ -50,6 +50,15 @@ class EngineProvisionerTest {
     }
 
     @Test
+    fun pcBiosDir_resolvesToFilesDirEnginePcBios() {
+        val pcBiosDir = provisioner.pcBiosDir
+        assertEquals(
+            File(fakeFilesDir, "engine/pc-bios").absolutePath,
+            pcBiosDir.absolutePath
+        )
+    }
+
+    @Test
     fun buildQemuArgs_usesNativeLibraryQemuBinaryAndVirtMachine() {
         val instance = VirtualInstance(
             id = 1L,
@@ -61,6 +70,9 @@ class EngineProvisionerTest {
 
         val args = provisioner.buildQemuArgs(instance)
         assertEquals(provisioner.qemuBinary.absolutePath, args[0])
+        assertTrue(args.contains("-L"))
+        val lIndex = args.indexOf("-L")
+        assertEquals(provisioner.pcBiosDir.absolutePath, args[lIndex + 1])
         assertTrue(args.contains("-M"))
         assertTrue(args.contains("virt,gic-version=3"))
         assertTrue(args.contains("-m"))

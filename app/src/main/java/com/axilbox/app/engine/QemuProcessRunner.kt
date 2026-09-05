@@ -18,7 +18,18 @@ class QemuProcessRunner(
         get() = activeProcess?.isAlive == true
 
     fun runQemu(args: List<String>): Flow<String> = flow {
-        val processBuilder = ProcessBuilder(args)
+        val launchArgs = if (!args.contains("-L") && provisioner.pcBiosDir.exists()) {
+            val list = args.toMutableList()
+            if (list.size > 1) {
+                list.addAll(1, listOf("-L", provisioner.pcBiosDir.absolutePath))
+            } else {
+                list.addAll(listOf("-L", provisioner.pcBiosDir.absolutePath))
+            }
+            list
+        } else {
+            args
+        }
+        val processBuilder = ProcessBuilder(launchArgs)
         val workingDir = provisioner.kernelDir.parentFile ?: provisioner.kernelDir
         processBuilder.directory(workingDir)
 

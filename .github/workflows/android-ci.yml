@@ -99,9 +99,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y patchelf binutils-aarch64-linux-gnu file curl python3
 
-      - name: Provision QEMU & Bionic Shared Libs Bundle (jniLibs arm64-v8a)
+      - name: Provision QEMU, Bionic Shared Libs Bundle & pc-bios Assets
         run: |
-          bash tools/engine/package-termux-qemu.sh jniLibs-bundle/arm64-v8a
+          bash tools/engine/package-termux-qemu.sh jniLibs-bundle/arm64-v8a assets-bundle/engine/pc-bios
 
       - name: Audit ELF Shared Objects & Reject Linker Scripts / Stubs
         run: |
@@ -402,11 +402,73 @@ jobs:
           print(f"✓ 100% Symbol-level closure verified across all {len(bundle_files)} native libraries!")
           EOF
 
+      - name: Strict pc-bios Option-ROM & Firmware Asset Assertion
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+
+          pc_bios_dir = "assets-bundle/engine/pc-bios"
+          if not os.path.isdir(pc_bios_dir):
+              print(f"FATAL: pc-bios directory '{pc_bios_dir}' does not exist!", file=sys.stderr)
+              sys.exit(1)
+
+          all_entries = sorted(os.listdir(pc_bios_dir))
+          print(f"=== Auditing pc-bios Firmware/Option-ROM Directory ({len(all_entries)} entries) ===")
+          
+          rom_count = 0
+          for entry in all_entries:
+              p = os.path.join(pc_bios_dir, entry)
+              if os.path.isfile(p):
+                  size = os.path.getsize(p)
+                  print(f"  * [rom] {entry:<30} ({size:>8} bytes)")
+                  rom_count += 1
+              elif os.path.isdir(p):
+                  children = len(os.listdir(p))
+                  print(f"  * [dir] {entry:<30} ({children} items)")
+
+          if rom_count == 0:
+              print("FATAL: pc-bios directory is empty!", file=sys.stderr)
+              sys.exit(1)
+
+          # Required ROM files QEMU aarch64 expects by default
+          required_roms = [
+              "efi-virtio.rom",
+              "efi-e1000.rom"
+          ]
+
+          missing_roms = []
+          for rom in required_roms:
+              p = os.path.join(pc_bios_dir, rom)
+              if not os.path.exists(p):
+                  missing_roms.append((rom, "file not found"))
+              elif os.path.getsize(p) < 1024:
+                  missing_roms.append((rom, f"file too small ({os.path.getsize(p)} bytes)"))
+
+          if missing_roms:
+              print("\n==================================================================", file=sys.stderr)
+              print("FATAL: pc-bios option-ROM assertion FAILED!", file=sys.stderr)
+              print("The following required firmware/ROM files are missing or invalid:", file=sys.stderr)
+              for rom, reason in missing_roms:
+                  print(f"  - {rom}: {reason}", file=sys.stderr)
+              print("==================================================================", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"\n✓ 100% pc-bios option-ROM integrity verified: {rom_count} firmware/ROM files present, all default ROMs ({', '.join(required_roms)}) verified!")
+          EOF
+
       - name: Upload QEMU jniLibs Bundle Artifact
         uses: actions/upload-artifact@v4
         with:
           name: qemu-jniLibs-bundle
           path: jniLibs-bundle/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload QEMU pc-bios Assets Bundle Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-pc-bios-assets
+          path: assets-bundle/
           if-no-files-found: error
           retention-days: 7
 
@@ -450,10 +512,18 @@ jobs:
           name: qemu-jniLibs-bundle
           path: app/src/main/jniLibs/
 
+      - name: Download QEMU pc-bios Assets Artifact (Job 2)
+        uses: actions/download-artifact@v4
+        with:
+          name: qemu-pc-bios-assets
+          path: app/src/main/assets/
+
       - name: Verify Packaged Asset & jniLibs Structure
         run: |
           echo "=== App Raw Assets (Kernel) ==="
           ls -lh app/src/main/assets/kernel/
+          echo "=== App Raw Assets (pc-bios) ==="
+          ls -lh app/src/main/assets/engine/pc-bios/ | head -n 30
           echo "=== App Native Libraries (jniLibs/arm64-v8a) ==="
           ls -la app/src/main/jniLibs/arm64-v8a/
 
@@ -463,10 +533,14 @@ jobs:
       - name: Build Debug APK
         run: gradle assembleDebug --stacktrace
 
-      - name: Verify APK Native Libraries (lib/*.so)
+      - name: Verify APK Contents (jniLibs & Assets)
         run: |
           echo "=== Inspecting Debug APK Contents for jniLibs ==="
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "lib/arm64-v8a/" || true
+          echo "=== Inspecting Debug APK Contents for pc-bios Assets ==="
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "assets/engine/pc-bios/" | head -n 25 || true
+          echo "=== Asserting efi-virtio.rom is in Debug APK ==="
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "assets/engine/pc-bios/efi-virtio.rom"
 
       - name: Install QEMU Runner for Host Sanity Check
         run: |
@@ -480,6 +554,7 @@ jobs:
           echo "The bundled Android Bionic QEMU binary in jniLibs requires a physical ARM64 Android device with nativeLibraryDir execution."
           
           qemu-system-aarch64 \
+            -L app/src/main/assets/engine/pc-bios \
             -M virt,gic-version=3 \
             -cpu max \
             -smp 2 \

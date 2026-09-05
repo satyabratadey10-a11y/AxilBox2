@@ -28,6 +28,12 @@ class EngineProvisioner(private val context: Context) {
     val bundledKernelImage: File
         get() = File(kernelDir, "Image")
 
+    val engineDir: File
+        get() = File(context.filesDir, "engine")
+
+    val pcBiosDir: File
+        get() = File(engineDir, "pc-bios")
+
     fun isEngineAvailable(): Boolean {
         return qemuBinary.exists() && (qemuBinary.canExecute() || NativeEngineBridge.hasExecutable(qemuBinary.absolutePath))
     }
@@ -36,15 +42,28 @@ class EngineProvisioner(private val context: Context) {
         return bundledKernelImage.exists() && bundledKernelImage.length() > 0
     }
 
+    fun isPcBiosAvailable(): Boolean {
+        return pcBiosDir.exists() && (File(pcBiosDir, "efi-virtio.rom").exists() || (pcBiosDir.listFiles()?.isNotEmpty() == true))
+    }
+
     suspend fun provisionEngineIfNeeded(): Boolean = withContext(Dispatchers.IO) {
         try {
             if (!kernelDir.exists()) {
                 kernelDir.mkdirs()
             }
+            if (!engineDir.exists()) {
+                engineDir.mkdirs()
+            }
 
             // Copy bundled guest kernel from assets to app private storage if not already present
             if (!isKernelAvailable()) {
                 copyAssetFolder("kernel", kernelDir)
+            }
+
+            // Copy bundled QEMU pc-bios option-ROMs/firmware from assets to app private storage
+            if (!isPcBiosAvailable()) {
+                pcBiosDir.mkdirs()
+                copyAssetFolder("engine/pc-bios", pcBiosDir)
             }
 
             isEngineAvailable() && isKernelAvailable()
@@ -86,6 +105,7 @@ class EngineProvisioner(private val context: Context) {
 
         val args = mutableListOf(
             qemuBinary.absolutePath,
+            "-L", pcBiosDir.absolutePath,
             "-M", "virt,gic-version=3",
             "-cpu", "cortex-a57",
             "-smp", instance.vCpuCount.toString(),

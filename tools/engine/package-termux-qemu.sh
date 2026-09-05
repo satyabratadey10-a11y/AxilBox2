@@ -3,11 +3,12 @@ set -euo pipefail
 
 # Output directory (defaults to jniLibs-bundle/arm64-v8a)
 OUTPUT_DIR="${1:-jniLibs-bundle/arm64-v8a}"
-mkdir -p "${OUTPUT_DIR}"
+ASSETS_DIR="${2:-assets-bundle/engine/pc-bios}"
+mkdir -p "${OUTPUT_DIR}" "${ASSETS_DIR}"
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
-echo "=== Provisioning QEMU & Recursive Bionic Dependencies for Android jniLibs (Target: arm64-v8a) ==="
+echo "=== Provisioning QEMU, Recursive Bionic Dependencies & pc-bios Assets ==="
 
 APT_REPO="https://packages.termux.dev/apt/termux-main"
 PACKAGES_INDEX_URL="${APT_REPO}/dists/stable/main/binary-aarch64/Packages"
@@ -20,7 +21,7 @@ curl -sSL "${PACKAGES_INDEX_URL}" -o "${WORK_DIR}/Packages" || {
 
 echo "[2/4] Resolving and downloading targeted recursive dependency closure..."
 
-WORK_DIR="${WORK_DIR}" OUTPUT_DIR="${OUTPUT_DIR}" APT_REPO="${APT_REPO}" python3 - <<'PY_SCRIPT'
+WORK_DIR="${WORK_DIR}" OUTPUT_DIR="${OUTPUT_DIR}" ASSETS_DIR="${ASSETS_DIR}" APT_REPO="${APT_REPO}" python3 - <<'PY_SCRIPT'
 import os
 import sys
 import subprocess
@@ -29,10 +30,12 @@ import re
 
 work_dir = os.environ["WORK_DIR"]
 output_dir = os.environ["OUTPUT_DIR"]
+assets_dir = os.environ.get("ASSETS_DIR", "assets-bundle/engine/pc-bios")
 apt_repo = os.environ["APT_REPO"].rstrip("/")
 packages_file = os.path.join(work_dir, "Packages")
 
 os.makedirs(output_dir, exist_ok=True)
+os.makedirs(assets_dir, exist_ok=True)
 
 # Standard Android Bionic system libraries provided directly by Android OS (/system/lib64, /apex)
 SYSTEM_LIBS = {
@@ -339,9 +342,13 @@ def find_elf_providing(needed_so, canon_name):
 
     return None
 
-# 2. Download package dependency closure tree
-print(" -> Provisioning QEMU package dependency tree...")
-pkg_queue = ["qemu-system-aarch64-headless", "glib", "libpixman", "libandroid-shmem", "libiconv", "pcre2", "libffi", "zlib", "libgnutls", "libnettle", "libgmp", "libtasn1", "p11-kit", "libunistring", "libidn2", "libc++", "dtc", "libpng", "libjpeg-turbo", "liblzo", "libbz2", "zstd", "libslirp"]
+pkg_queue = [
+    "qemu-system-aarch64-headless",
+    "qemu-common",
+    "glib", "libpixman", "libandroid-shmem", "libiconv", "pcre2", "libffi", "zlib",
+    "libgnutls", "libnettle", "libgmp", "libtasn1", "p11-kit", "libunistring", "libidn2",
+    "libc++", "dtc", "libpng", "libjpeg-turbo", "liblzo", "libbz2", "zstd", "libslirp"
+]
 
 while pkg_queue:
     pkg_name = pkg_queue.pop(0)
@@ -521,7 +528,61 @@ if empty_dynsyms:
     sys.exit(1)
 
 print(f"✓ All {len(available_bundle_sos)} native libraries are 100% self-contained, ELF-audited, and functionally complete!")
+
+# 7. Locate, bundle, and audit QEMU pc-bios Option-ROMs / firmware
+print("=== Locating and Bundling QEMU pc-bios Option-ROMs / Firmware ===")
+pc_bios_src = None
+
+# Search for efi-virtio.rom or share/qemu or pc-bios in extracted packages
+for root, dirs, files in os.walk(work_dir):
+    if "efi-virtio.rom" in files:
+        pc_bios_src = root
+        break
+
+if not pc_bios_src:
+    for root, dirs, files in os.walk(work_dir):
+        if (root.endswith("share/qemu") or root.endswith("pc-bios")) and any(f.endswith((".rom", ".bin", ".fd")) for f in files):
+            pc_bios_src = root
+            break
+
+if not pc_bios_src:
+    print("FATAL: Could not locate QEMU pc-bios firmware directory in extracted packages!", file=sys.stderr)
+    sys.exit(1)
+
+print(f" -> Found QEMU pc-bios source at: {pc_bios_src}")
+
+rom_count = 0
+for item in sorted(os.listdir(pc_bios_src)):
+    s = os.path.join(pc_bios_src, item)
+    d = os.path.join(assets_dir, item)
+    if os.path.isdir(s):
+        shutil.copytree(s, d, dirs_exist_ok=True)
+    else:
+        shutil.copy2(s, d)
+    rom_count += 1
+
+print(f" -> Successfully bundled {rom_count} firmware/ROM entries into {assets_dir}")
+
+# Audit required ROM files
+required_roms = ["efi-virtio.rom", "efi-e1000.rom"]
+missing_roms = []
+for rom in required_roms:
+    p = os.path.join(assets_dir, rom)
+    if not os.path.exists(p):
+        missing_roms.append((rom, "file not found"))
+    elif os.path.getsize(p) < 1024:
+        missing_roms.append((rom, f"file too small ({os.path.getsize(p)} bytes)"))
+
+if missing_roms:
+    print(f"FATAL: Missing required pc-bios romfiles in {assets_dir}: {missing_roms}", file=sys.stderr)
+    sys.exit(1)
+
+print(f"✓ Verified required default ROMs ({', '.join(required_roms)}) present in pc-bios asset bundle!")
 PY_SCRIPT
 
 echo "=== Verified Output Directory (${OUTPUT_DIR}) ==="
 ls -lh "${OUTPUT_DIR}"
+
+echo "=== Verified Assets Directory (${ASSETS_DIR}) ==="
+ls -lh "${ASSETS_DIR}" | head -n 30
+

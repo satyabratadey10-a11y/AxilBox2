@@ -60,6 +60,19 @@ object NativeEngineBridge {
         return true
     }
 
+    fun formatBiosArg(biosPath: String): String {
+        return if (isNativeLoaded) {
+            try {
+                nativeFormatBiosArg(biosPath)
+            } catch (_: Throwable) {
+                "-L $biosPath"
+            }
+        } else {
+            "-L $biosPath"
+        }
+    }
+
     private external fun nativeHasExecutable(path: String): Boolean
     private external fun nativeChmodExecutable(path: String): Boolean
+    private external fun nativeFormatBiosArg(path: String): String
 }

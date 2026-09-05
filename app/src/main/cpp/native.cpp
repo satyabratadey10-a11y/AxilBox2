@@ -53,4 +53,23 @@ Java_com_axilbox_app_engine_NativeEngineBridge_chmodExecutable(
     return (res == 0) ? JNI_TRUE : JNI_FALSE;
 }
 
+/**
+ * Formats the QEMU -L argument for firmware/option-ROM resolution against the extracted pc-bios directory.
+ */
+JNIEXPORT jstring JNICALL
+Java_com_axilbox_app_engine_NativeEngineBridge_formatBiosArg(
+    JNIEnv* env,
+    jobject /* this */,
+    jstring biosPath
+) {
+    if (biosPath == nullptr) return env->NewStringUTF("-L");
+
+    const char* cpath = env->GetStringUTFChars(biosPath, nullptr);
+    if (cpath == nullptr) return env->NewStringUTF("-L");
+
+    std::string arg = std::string("-L ") + cpath;
+    env->ReleaseStringUTFChars(biosPath, cpath);
+    return env->NewStringUTF(arg.c_str());
+}
+
 } // extern "C"
