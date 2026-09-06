@@ -337,3 +337,9 @@ In Linux kernel bootstrapping, there are two primary methods for establishing th
 #### 3. Kernel Command-Line Parameter Deduplication Discipline
 - **The Issue:** Prepending fixed defaults (such as `console=ttyAMA0 earlycon=pl011,0x09000000 panic=-1`) to user-configured command-line fields resulted in duplicated arguments appearing on the kernel command line in serial logs.
 - **The Engine Fix:** `EngineProvisioner.buildKernelCmdline` implements a token-based deduplication mechanism. Base requirements (`console`, `earlycon`, `panic`, `rdinit`) are tracked in a keyed map. If the instance configuration or user supplies custom values for any of these parameters, the default is superseded without duplication. All additional user flags are appended preserving order.
+
+#### 4. AAPT2 Asset Preservation & Dual-Format Initramfs Handling
+- **AAPT2 Compression Behavior:** By default, Android Asset Packaging Tool 2 (AAPT2) decompresses `.gz` files placed in `assets/` and strips the `.gz` extension during APK assembly, causing file name mismatches and unnecessary APK inflation.
+- **`noCompress` Configuration:** In `app/build.gradle.kts`, `androidResources.noCompress.addAll(listOf("gz", "cpio", "rom", "bin", "fd"))` instructs AAPT2 to store compressed archives and firmware ROMs verbatim without recompression or name stripping.
+- **Runtime Fallback:** `EngineProvisioner.bundledInitrd` and `isInitrdAvailable()` dynamically probe for both `rootfs.cpio.gz` and `rootfs.cpio`, ensuring the engine provisions and boots the guest initramfs regardless of the packaging state.
+
