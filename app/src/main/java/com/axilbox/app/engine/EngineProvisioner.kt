@@ -29,7 +29,13 @@ class EngineProvisioner(private val context: Context) {
         get() = File(kernelDir, "Image")
 
     val bundledInitrd: File
-        get() = File(kernelDir, "rootfs.cpio.gz")
+        get() {
+            val gz = File(kernelDir, "rootfs.cpio.gz")
+            if (gz.exists() && gz.length() > 0) return gz
+            val cpio = File(kernelDir, "rootfs.cpio")
+            if (cpio.exists() && cpio.length() > 0) return cpio
+            return gz
+        }
 
     val engineDir: File
         get() = File(context.filesDir, "engine")
@@ -46,7 +52,8 @@ class EngineProvisioner(private val context: Context) {
     }
 
     fun isInitrdAvailable(): Boolean {
-        return bundledInitrd.exists() && bundledInitrd.length() > 0
+        return (File(kernelDir, "rootfs.cpio.gz").exists() && File(kernelDir, "rootfs.cpio.gz").length() > 0) ||
+               (File(kernelDir, "rootfs.cpio").exists() && File(kernelDir, "rootfs.cpio").length() > 0)
     }
 
     fun isPcBiosAvailable(): Boolean {

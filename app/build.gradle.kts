@@ -59,6 +59,10 @@ android {
         compose = true
     }
 
+    androidResources {
+        noCompress.addAll(listOf("gz", "cpio", "rom", "bin", "fd"))
+    }
+
     packaging {
         jniLibs {
             useLegacyPackaging = true

@@ -569,10 +569,14 @@ jobs:
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "lib/arm64-v8a/" || true
           echo "=== Inspecting Debug APK Contents for pc-bios Assets ==="
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "assets/engine/pc-bios/" | head -n 25 || true
+          echo "=== Inspecting Debug APK Contents for Kernel Assets ==="
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "assets/kernel/" || true
           echo "=== Asserting efi-virtio.rom is in Debug APK ==="
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "assets/engine/pc-bios/efi-virtio.rom"
-          echo "=== Asserting rootfs.cpio.gz is in Debug APK ==="
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "assets/kernel/rootfs.cpio.gz"
+          echo "=== Asserting guest kernel Image is in Debug APK ==="
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "assets/kernel/Image"
+          echo "=== Asserting rootfs initrd is in Debug APK ==="
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -E "assets/kernel/rootfs\.cpio(\.gz)?"
 
       - name: Install QEMU Runner for Host Sanity Check
         run: |
