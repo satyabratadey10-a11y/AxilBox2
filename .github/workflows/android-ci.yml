@@ -475,7 +475,13 @@ jobs:
               print("==================================================================", file=sys.stderr)
               sys.exit(1)
 
-          print(f"\n✓ 100% pc-bios option-ROM integrity verified: {rom_count} firmware/ROM files present, all default ROMs ({', '.join(required_roms)}) verified!")
+          # Assert that no bloatware EDK2 UEFI images (*.fd) are bundled
+          fd_files = [e for e in all_entries if e.endswith(".fd") or "edk2" in e.lower()]
+          if fd_files:
+              print(f"FATAL: Unneeded EDK2 UEFI firmware files detected in pc-bios asset bundle: {fd_files}", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"\n✓ 100% pc-bios option-ROM integrity verified: {rom_count} firmware/ROM files present, all default ROMs ({', '.join(required_roms)}) verified, zero EDK2 bloat!")
           EOF
 
       - name: Upload QEMU jniLibs Bundle Artifact
@@ -563,20 +569,50 @@ jobs:
       - name: Build Debug APK
         run: gradle assembleDebug --stacktrace
 
-      - name: Verify APK Contents (jniLibs & Assets)
+      - name: Verify APK Contents & Size Breakdown
         run: |
-          echo "=== Inspecting Debug APK Contents for jniLibs ==="
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "lib/arm64-v8a/" || true
-          echo "=== Inspecting Debug APK Contents for pc-bios Assets ==="
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "assets/engine/pc-bios/" | head -n 25 || true
-          echo "=== Inspecting Debug APK Contents for Kernel Assets ==="
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "assets/kernel/" || true
-          echo "=== Asserting efi-virtio.rom is in Debug APK ==="
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "assets/engine/pc-bios/efi-virtio.rom"
-          echo "=== Asserting guest kernel Image is in Debug APK ==="
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "assets/kernel/Image"
-          echo "=== Asserting rootfs initrd is in Debug APK ==="
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -E "assets/kernel/rootfs\.cpio(\.gz)?"
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          echo "=== Debug APK File Size ==="
+          ls -lh "${APK_PATH}"
+
+          echo "=== Top 25 Entries by Uncompressed Size in Debug APK (unzip -lv) ==="
+          python3 - <<'EOF'
+          import subprocess, sys
+
+          cmd = ["unzip", "-lv", "app/build/outputs/apk/debug/app-debug.apk"]
+          out = subprocess.check_output(cmd, text=True, errors="ignore")
+          entries = []
+          for line in out.splitlines():
+              parts = line.strip().split(None, 7)
+              if len(parts) >= 8 and parts[0].isdigit():
+                  try:
+                      length = int(parts[0])
+                      cmpr_size = int(parts[2])
+                      name = parts[7]
+                      entries.append((length, cmpr_size, name))
+                  except ValueError:
+                      pass
+
+          entries.sort(key=lambda x: x[0], reverse=True)
+          print(f"{'Rank':<5} {'Uncompressed':<14} {'Compressed':<14} {'Name'}")
+          print("=" * 80)
+          for i, (length, cmpr_size, name) in enumerate(entries[:25], 1):
+              print(f"{i:<5} {length:<14} {cmpr_size:<14} {name}")
+
+          # Explicit assertions
+          names = [e[2] for e in entries]
+          assert any("efi-virtio.rom" in n for n in names), "FATAL: efi-virtio.rom missing from APK!"
+          assert any("efi-e1000.rom" in n for n in names), "FATAL: efi-e1000.rom missing from APK!"
+          assert any("assets/kernel/Image" in n for n in names), "FATAL: assets/kernel/Image missing from APK!"
+          assert any("assets/kernel/rootfs.cpio" in n for n in names), "FATAL: assets/kernel/rootfs.cpio(.gz) missing from APK!"
+
+          fd_files = [n for n in names if n.endswith(".fd") or "edk2" in n.lower()]
+          if fd_files:
+              print(f"FATAL: EDK2 UEFI firmware images found in APK: {fd_files}", file=sys.stderr)
+              sys.exit(1)
+
+          print("\n✓ 100% APK contents verified: kernel Image, rootfs initrd, and required ROMs present; zero EDK2 bloat!")
+          EOF
 
       - name: Install QEMU Runner for Host Sanity Check
         run: |

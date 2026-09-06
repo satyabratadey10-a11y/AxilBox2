@@ -529,8 +529,39 @@ if empty_dynsyms:
 
 print(f"✓ All {len(available_bundle_sos)} native libraries are 100% self-contained, ELF-audited, and functionally complete!")
 
-# 7. Locate, bundle, and audit QEMU pc-bios Option-ROMs / firmware
-print("=== Locating and Bundling QEMU pc-bios Option-ROMs / Firmware ===")
+# 7. Strip debug symbols from all bundled native libraries (after closure verification)
+print("=== Stripping Debug Symbols from Native Libraries Bundle ===")
+strip_bin = None
+for cand in ["aarch64-linux-android-strip", "aarch64-linux-gnu-strip", "llvm-strip", "strip"]:
+    p = shutil.which(cand)
+    if p:
+        strip_bin = p
+        break
+
+if not strip_bin:
+    print("WARNING: No strip utility found (aarch64-linux-android-strip / aarch64-linux-gnu-strip / llvm-strip / strip); skipping strip.", file=sys.stderr)
+else:
+    print(f" -> Using strip binary: {strip_bin}")
+    total_before = 0
+    total_after = 0
+    for fname in sorted(available_bundle_sos):
+        fpath = os.path.join(output_dir, fname)
+        size_before = os.path.getsize(fpath)
+        total_before += size_before
+        res = subprocess.run([strip_bin, "--strip-unneeded", fpath], capture_output=True, text=True)
+        if res.returncode != 0:
+            print(f"Warning: Failed to strip {fname}: {res.stderr.strip()}", file=sys.stderr)
+        size_after = os.path.getsize(fpath)
+        total_after += size_after
+        saved = size_before - size_after
+        pct = (saved / size_before * 100) if size_before > 0 else 0
+        print(f"  * [stripped] {fname:<35} {size_before:>10} -> {size_after:>10} bytes (-{saved:>9} bytes, -{pct:.1f}%)")
+
+    total_saved = total_before - total_after
+    print(f"✓ Native libraries stripped: {total_before:,} -> {total_after:,} bytes (saved {total_saved:,} bytes / {total_saved/(1024*1024):.2f} MB)")
+
+# 8. Locate, filter, bundle, and audit QEMU pc-bios Option-ROMs / firmware
+print("=== Locating and Bundling Curated QEMU pc-bios Option-ROMs ===")
 pc_bios_src = None
 
 # Search for efi-virtio.rom or share/qemu or pc-bios in extracted packages
@@ -551,17 +582,37 @@ if not pc_bios_src:
 
 print(f" -> Found QEMU pc-bios source at: {pc_bios_src}")
 
+# Filter function: Stage 1 uses -kernel/-initrd directly without EFI/BIOS boot.
+# Exclude all EDK2 UEFI images (*.fd) and non-aarch64 foreign architecture firmware.
+def should_bundle_rom_item(item_name, full_src_path):
+    # Exclude all EDK2 / UEFI firmware images
+    if item_name.endswith(".fd") or "edk2" in item_name.lower():
+        return False
+    # Exclude non-ARM foreign architecture firmware / bootroms
+    foreign_prefixes = (
+        "openbios-", "hppa-", "palcode-", "opensbi-", "pnv-", "s390-",
+        "bios", "vgabios", "kvmvapic", "ast27x0", "npcm", "QEMU,"
+    )
+    if any(item_name.startswith(p) for p in foreign_prefixes):
+        return False
+    return True
+
 rom_count = 0
+bundled_bytes = 0
 for item in sorted(os.listdir(pc_bios_src)):
     s = os.path.join(pc_bios_src, item)
     d = os.path.join(assets_dir, item)
+    if not should_bundle_rom_item(item, s):
+        continue
+
     if os.path.isdir(s):
         shutil.copytree(s, d, dirs_exist_ok=True)
     else:
         shutil.copy2(s, d)
+        bundled_bytes += os.path.getsize(d)
     rom_count += 1
 
-print(f" -> Successfully bundled {rom_count} firmware/ROM entries into {assets_dir}")
+print(f" -> Successfully bundled {rom_count} curated firmware/ROM entries into {assets_dir} ({bundled_bytes:,} bytes / {bundled_bytes/(1024*1024):.2f} MB)")
 
 # Audit required ROM files
 required_roms = ["efi-virtio.rom", "efi-e1000.rom"]
@@ -577,7 +628,13 @@ if missing_roms:
     print(f"FATAL: Missing required pc-bios romfiles in {assets_dir}: {missing_roms}", file=sys.stderr)
     sys.exit(1)
 
-print(f"✓ Verified required default ROMs ({', '.join(required_roms)}) present in pc-bios asset bundle!")
+# Ensure no .fd files crept in
+fd_files = [f for f in os.listdir(assets_dir) if f.endswith(".fd") or "edk2" in f.lower()]
+if fd_files:
+    print(f"FATAL: Unwanted EDK2 UEFI images found in assets: {fd_files}", file=sys.stderr)
+    sys.exit(1)
+
+print(f"✓ Verified required default ROMs ({', '.join(required_roms)}) present, EDK2 bloat excluded!")
 PY_SCRIPT
 
 echo "=== Verified Output Directory (${OUTPUT_DIR}) ==="
