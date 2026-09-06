@@ -582,20 +582,17 @@ if not pc_bios_src:
 
 print(f" -> Found QEMU pc-bios source at: {pc_bios_src}")
 
-# Filter function: Stage 1 uses -kernel/-initrd directly without EFI/BIOS boot.
-# Exclude all EDK2 UEFI images (*.fd) and non-aarch64 foreign architecture firmware.
+# Strict whitelist function: Stage 1 uses -kernel/-initrd directly without EFI/BIOS boot.
+# Keep only PCI device option ROMs (efi-*.rom, pxe-*.rom) and keymaps directory.
+# Everything else (EDK2 *.fd, firmware descriptor jsons, foreign architecture ROMs) is excluded.
 def should_bundle_rom_item(item_name, full_src_path):
-    # Exclude all EDK2 / UEFI firmware images
-    if item_name.endswith(".fd") or "edk2" in item_name.lower():
-        return False
-    # Exclude non-ARM foreign architecture firmware / bootroms
-    foreign_prefixes = (
-        "openbios-", "hppa-", "palcode-", "opensbi-", "pnv-", "s390-",
-        "bios", "vgabios", "kvmvapic", "ast27x0", "npcm", "QEMU,"
-    )
-    if any(item_name.startswith(p) for p in foreign_prefixes):
-        return False
-    return True
+    if item_name.startswith("efi-") and item_name.endswith(".rom"):
+        return True
+    if item_name.startswith("pxe-") and item_name.endswith(".rom"):
+        return True
+    if item_name == "keymaps" and os.path.isdir(full_src_path):
+        return True
+    return False
 
 rom_count = 0
 bundled_bytes = 0
@@ -607,6 +604,9 @@ for item in sorted(os.listdir(pc_bios_src)):
 
     if os.path.isdir(s):
         shutil.copytree(s, d, dirs_exist_ok=True)
+        for root, _, files in os.walk(d):
+            for f in files:
+                bundled_bytes += os.path.getsize(os.path.join(root, f))
     else:
         shutil.copy2(s, d)
         bundled_bytes += os.path.getsize(d)
