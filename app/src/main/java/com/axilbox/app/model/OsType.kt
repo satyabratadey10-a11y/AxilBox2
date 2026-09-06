@@ -26,7 +26,7 @@ enum class OsType(
         defaultRamMb = 512,
         defaultVCpus = 1,
         defaultStorageGb = 4,
-        defaultCmdline = "console=ttyAMA0 earlycon=pl011,0x09000000 panic=-1"
+        defaultCmdline = "console=ttyAMA0 earlycon=pl011,0x09000000 panic=-1 rdinit=/sbin/init"
     ),
     CUSTOM_RAW(
         displayName = "Custom Raw Disk",

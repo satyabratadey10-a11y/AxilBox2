@@ -59,6 +59,34 @@ class EngineProvisionerTest {
     }
 
     @Test
+    fun bundledInitrd_resolvesToFilesDirKernelRootfsCpioGz() {
+        val initrd = provisioner.bundledInitrd
+        assertEquals(
+            File(fakeFilesDir, "kernel/rootfs.cpio.gz").absolutePath,
+            initrd.absolutePath
+        )
+    }
+
+    @Test
+    fun buildKernelCmdline_deduplicatesConsoleAndEarlyconAndIncludesRdinit() {
+        val instanceWithDuplicates = VirtualInstance(
+            id = 2L,
+            name = "TestCmdline",
+            osType = OsType.LINUX_GENERIC,
+            extraCmdline = "console=ttyAMA0 earlycon=pl011,0x09000000 panic=-1 custom_arg=1"
+        )
+
+        val cmdline = provisioner.buildKernelCmdline(instanceWithDuplicates)
+
+        // Ensure console and earlycon appear exactly once
+        assertEquals(1, "console=ttyAMA0".toRegex().findAll(cmdline).count())
+        assertEquals(1, "earlycon=pl011,0x09000000".toRegex().findAll(cmdline).count())
+        assertEquals(1, "panic=-1".toRegex().findAll(cmdline).count())
+        assertTrue(cmdline.contains("rdinit=/sbin/init"))
+        assertTrue(cmdline.contains("custom_arg=1"))
+    }
+
+    @Test
     fun buildQemuArgs_usesNativeLibraryQemuBinaryAndVirtMachine() {
         val instance = VirtualInstance(
             id = 1L,
@@ -85,5 +113,10 @@ class EngineProvisionerTest {
         assertTrue(args.contains("none"))
         assertTrue(args.contains("-serial"))
         assertTrue(args.contains("stdio"))
+        assertTrue(args.contains("-append"))
+        val appendIndex = args.indexOf("-append")
+        val cmdline = args[appendIndex + 1]
+        assertTrue(cmdline.contains("rdinit=/sbin/init"))
+        assertEquals(1, "console=ttyAMA0".toRegex().findAll(cmdline).count())
     }
 }

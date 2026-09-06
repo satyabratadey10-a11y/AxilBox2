@@ -61,6 +61,8 @@ jobs:
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
           bash ../tools/kernel/configure-virt-kernel.sh
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          echo "=== Post-olddefconfig Initramfs Capability Assertion ==="
+          grep -E "^(CONFIG_BLK_DEV_INITRD|CONFIG_RD_GZIP)=y" .config
 
       - name: Build ARM64 Kernel Image
         if: steps.kernel-cache.outputs.cache-hit != 'true'
@@ -78,6 +80,26 @@ jobs:
         with:
           name: guest-kernel-image
           path: linux-src/arch/arm64/boot/Image
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Prepare Alpine Minirootfs & Convert to newc cpio.gz
+        run: |
+          bash tools/rootfs/prepare-alpine-rootfs.sh rootfs-bundle/rootfs.cpio.gz downloads/rootfs
+
+      - name: Upload Guest Rootfs Initrd Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-rootfs-initrd
+          path: rootfs-bundle/rootfs.cpio.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Original Verified Alpine Minirootfs Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpine-minirootfs-original
+          path: downloads/rootfs/
           if-no-files-found: error
           retention-days: 7
 
@@ -506,6 +528,12 @@ jobs:
           name: guest-kernel-image
           path: app/src/main/assets/kernel/
 
+      - name: Download Guest Rootfs Initrd Artifact (Job 1)
+        uses: actions/download-artifact@v4
+        with:
+          name: guest-rootfs-initrd
+          path: app/src/main/assets/kernel/
+
       - name: Download QEMU jniLibs Bundle Artifact (Job 2)
         uses: actions/download-artifact@v4
         with:
@@ -520,8 +548,10 @@ jobs:
 
       - name: Verify Packaged Asset & jniLibs Structure
         run: |
-          echo "=== App Raw Assets (Kernel) ==="
+          echo "=== App Raw Assets (Kernel & Initrd) ==="
           ls -lh app/src/main/assets/kernel/
+          file app/src/main/assets/kernel/Image
+          file app/src/main/assets/kernel/rootfs.cpio.gz
           echo "=== App Raw Assets (pc-bios) ==="
           ls -lh app/src/main/assets/engine/pc-bios/ | head -n 30
           echo "=== App Native Libraries (jniLibs/arm64-v8a) ==="
@@ -541,16 +571,18 @@ jobs:
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "assets/engine/pc-bios/" | head -n 25 || true
           echo "=== Asserting efi-virtio.rom is in Debug APK ==="
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "assets/engine/pc-bios/efi-virtio.rom"
+          echo "=== Asserting rootfs.cpio.gz is in Debug APK ==="
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep "assets/kernel/rootfs.cpio.gz"
 
       - name: Install QEMU Runner for Host Sanity Check
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-system-arm qemu-system-misc
 
-      - name: Kernel Sanity Check via Host-Native QEMU (ARM64 Kernel Verification)
+      - name: Kernel & Userspace Sanity Check via Host-Native QEMU
         run: |
-          echo "=== Running Kernel Sanity Check via Host-Native QEMU Runner ==="
-          echo "Note: This step verifies the built ARM64 Linux kernel Image using the host runner's native QEMU emulator."
+          echo "=== Running Kernel & Userspace Sanity Check via Host-Native QEMU Runner ==="
+          echo "Note: This step verifies the built ARM64 Linux kernel Image and guest initramfs using the host runner's native QEMU emulator."
           echo "The bundled Android Bionic QEMU binary in jniLibs requires a physical ARM64 Android device with nativeLibraryDir execution."
           
           qemu-system-aarch64 \
@@ -560,7 +592,8 @@ jobs:
             -smp 2 \
             -m 512M \
             -kernel app/src/main/assets/kernel/Image \
-            -append "console=ttyAMA0 earlycon=pl011,0x09000000 panic=-1 printk.devkmsg=on" \
+            -initrd app/src/main/assets/kernel/rootfs.cpio.gz \
+            -append "console=ttyAMA0 earlycon=pl011,0x09000000 panic=-1 rdinit=/sbin/init printk.devkmsg=on" \
             -display none \
             -monitor none \
             -serial stdio \
@@ -569,8 +602,8 @@ jobs:
           QEMU_PID=$!
           echo "Started host QEMU process (PID $QEMU_PID). Collecting serial stream..."
           
-          # Allow kernel to boot and stream PL011 UART logs
-          sleep 20
+          # Allow kernel and userspace to boot and stream PL011 UART logs
+          sleep 25
           kill -9 $QEMU_PID || true
 
           echo "=== Host QEMU Serial Console Log Output ==="
@@ -578,11 +611,27 @@ jobs:
           echo "==========================================="
 
           # Assert genuine Linux kernel boot telemetry
-          echo "Validating genuine kernel boot telemetry..."
+          echo "Validating genuine kernel & userspace boot telemetry..."
           grep -q "Booting Linux on physical CPU" host-qemu-boot.log || (echo "FATAL: Booting Linux banner not found in serial log" && exit 1)
           grep -q "Linux version" host-qemu-boot.log || (echo "FATAL: Linux version banner not found in serial log" && exit 1)
           grep -q "pl011" host-qemu-boot.log || (echo "FATAL: pl011 earlycon log not found in serial log" && exit 1)
-          echo "✓ Kernel sanity check verified on host QEMU runner!"
+          grep -q "initramfs" host-qemu-boot.log || (echo "FATAL: initramfs log not found in serial log" && exit 1)
+
+          # Assert no kernel panic
+          if grep -i "Kernel panic" host-qemu-boot.log; then
+              echo "FATAL: Kernel panic detected in serial boot log!" >&2
+              exit 1
+          fi
+          echo "✓ Confirmed: NO kernel panic detected!"
+
+          # Assert early-userspace execution
+          if grep -E "(OpenRC|Run /sbin/init as init process|Welcome to Alpine Linux|login:|/bin/sh)" host-qemu-boot.log; then
+              echo "✓ Early-userspace execution confirmed in serial boot log!"
+          else
+              echo "FATAL: Expected early-userspace output (OpenRC / init / shell prompt) not found in boot log!" >&2
+              exit 1
+          fi
+          echo "✓ Stage 1 Kernel & Userspace boot successfully verified!"
 
       - name: Upload Test Reports
         if: always()

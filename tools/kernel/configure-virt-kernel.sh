@@ -23,6 +23,20 @@ set -euo pipefail
 ./scripts/config --enable CONFIG_EXT4_FS_POSIX_ACL
 ./scripts/config --enable CONFIG_EXT4_FS_SECURITY
 
+# Initramfs & Compression Support (Stage 1 guest rootfs)
+./scripts/config --enable CONFIG_BLK_DEV_INITRD
+./scripts/config --enable CONFIG_RD_GZIP
+
+# Explicitly assert initramfs options are enabled via scripts/config
+for opt in CONFIG_BLK_DEV_INITRD CONFIG_RD_GZIP; do
+    state=$(./scripts/config --state "$opt" || true)
+    if [ "$state" != "y" ]; then
+        echo "FATAL: Required kernel option $opt is not enabled (state='$state')!" >&2
+        exit 1
+    fi
+    echo "✓ Verified $opt=y"
+done
+
 # Core Hardware & Addressing
 ./scripts/config --enable CONFIG_ARM64_VA_BITS_48
 ./scripts/config --enable CONFIG_ARM64_4K_PAGES

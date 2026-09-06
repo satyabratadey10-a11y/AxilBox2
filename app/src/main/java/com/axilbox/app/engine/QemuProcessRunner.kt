@@ -18,16 +18,21 @@ class QemuProcessRunner(
         get() = activeProcess?.isAlive == true
 
     fun runQemu(args: List<String>): Flow<String> = flow {
-        val launchArgs = if (!args.contains("-L") && provisioner.pcBiosDir.exists()) {
-            val list = args.toMutableList()
-            if (list.size > 1) {
-                list.addAll(1, listOf("-L", provisioner.pcBiosDir.absolutePath))
+        val launchArgs = args.toMutableList()
+        if (!launchArgs.contains("-L") && provisioner.pcBiosDir.exists()) {
+            if (launchArgs.size > 1) {
+                launchArgs.addAll(1, listOf("-L", provisioner.pcBiosDir.absolutePath))
             } else {
-                list.addAll(listOf("-L", provisioner.pcBiosDir.absolutePath))
+                launchArgs.addAll(listOf("-L", provisioner.pcBiosDir.absolutePath))
             }
-            list
-        } else {
-            args
+        }
+        if (!launchArgs.contains("-initrd") && provisioner.isInitrdAvailable()) {
+            val kIndex = launchArgs.indexOf("-kernel")
+            if (kIndex != -1 && kIndex + 1 < launchArgs.size) {
+                launchArgs.addAll(kIndex + 2, listOf("-initrd", provisioner.bundledInitrd.absolutePath))
+            } else {
+                launchArgs.addAll(listOf("-initrd", provisioner.bundledInitrd.absolutePath))
+            }
         }
         val processBuilder = ProcessBuilder(launchArgs)
         val workingDir = provisioner.kernelDir.parentFile ?: provisioner.kernelDir

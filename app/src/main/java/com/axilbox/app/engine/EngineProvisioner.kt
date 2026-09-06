@@ -28,6 +28,9 @@ class EngineProvisioner(private val context: Context) {
     val bundledKernelImage: File
         get() = File(kernelDir, "Image")
 
+    val bundledInitrd: File
+        get() = File(kernelDir, "rootfs.cpio.gz")
+
     val engineDir: File
         get() = File(context.filesDir, "engine")
 
@@ -40,6 +43,10 @@ class EngineProvisioner(private val context: Context) {
 
     fun isKernelAvailable(): Boolean {
         return bundledKernelImage.exists() && bundledKernelImage.length() > 0
+    }
+
+    fun isInitrdAvailable(): Boolean {
+        return bundledInitrd.exists() && bundledInitrd.length() > 0
     }
 
     fun isPcBiosAvailable(): Boolean {
@@ -55,8 +62,8 @@ class EngineProvisioner(private val context: Context) {
                 engineDir.mkdirs()
             }
 
-            // Copy bundled guest kernel from assets to app private storage if not already present
-            if (!isKernelAvailable()) {
+            // Copy bundled guest kernel and initrd from assets to app private storage if not already present
+            if (!isKernelAvailable() || !isInitrdAvailable()) {
                 copyAssetFolder("kernel", kernelDir)
             }
 
@@ -100,7 +107,37 @@ class EngineProvisioner(private val context: Context) {
         }
     }
 
-    fun buildQemuArgs(instance: VirtualInstance, customKernelPath: String? = null): List<String> {
+    fun buildKernelCmdline(instance: VirtualInstance): String {
+        // Base required parameters for virt machine serial earlycon and initramfs boot
+        val baseParams = linkedMapOf(
+            "console" to "console=ttyAMA0",
+            "earlycon" to "earlycon=pl011,0x09000000",
+            "panic" to "panic=-1",
+            "rdinit" to "rdinit=/sbin/init"
+        )
+
+        val userTokens = instance.extraCmdline.trim().split("\\s+".toRegex()).filter { it.isNotBlank() }
+        val orderedUserTokens = mutableListOf<String>()
+
+        for (token in userTokens) {
+            val key = token.substringBefore("=")
+            if (baseParams.containsKey(key)) {
+                // User explicitly provided this parameter; override default without duplicating
+                baseParams.remove(key)
+            }
+            orderedUserTokens.add(token)
+        }
+
+        // Remaining base defaults first, followed by user tokens (no duplicates)
+        val combined = baseParams.values + orderedUserTokens
+        return combined.joinToString(" ")
+    }
+
+    fun buildQemuArgs(
+        instance: VirtualInstance,
+        customKernelPath: String? = null,
+        customInitrdPath: String? = null
+    ): List<String> {
         val kernelPath = customKernelPath ?: instance.kernelUri ?: bundledKernelImage.absolutePath
 
         val args = mutableListOf(
@@ -113,9 +150,10 @@ class EngineProvisioner(private val context: Context) {
             "-kernel", kernelPath
         )
 
-        // Initrd if supplied
-        if (!instance.initrdUri.isNullOrBlank()) {
-            args.addAll(listOf("-initrd", instance.initrdUri))
+        // Initrd (bundled or custom instance URI)
+        val resolvedInitrd = customInitrdPath ?: instance.initrdUri ?: if (isInitrdAvailable()) bundledInitrd.absolutePath else null
+        if (!resolvedInitrd.isNullOrBlank() && File(resolvedInitrd).exists()) {
+            args.addAll(listOf("-initrd", resolvedInitrd))
         }
 
         // Disk image if supplied
@@ -125,14 +163,11 @@ class EngineProvisioner(private val context: Context) {
             ))
         }
 
-        // Serial and kernel cmdline
-        val cmdlineBuilder = StringBuilder("console=ttyAMA0 earlycon=pl011,0x09000000 panic=-1")
-        if (instance.extraCmdline.isNotBlank()) {
-            cmdlineBuilder.append(" ").append(instance.extraCmdline.trim())
-        }
+        // Serial and kernel cmdline with deduplicated arguments
+        val cmdline = buildKernelCmdline(instance)
 
         args.addAll(listOf(
-            "-append", cmdlineBuilder.toString(),
+            "-append", cmdline,
             "-display", "none",
             "-monitor", "none",
             "-serial", "stdio",

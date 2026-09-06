@@ -321,3 +321,19 @@ Once the Android 10+ W^X execution restriction is resolved and dynamic symbol cl
   ```
   allowing QEMU to resolve `efi-virtio.rom` and all subsequent device ROMs from the extracted asset directory on Android storage.
 - **Sourcing & CI Enforcement:** The full `pc-bios` tree is extracted directly from the Termux `qemu-common` package alongside `qemu-system-aarch64-headless` in `tools/engine/package-termux-qemu.sh`. Job 2 strictly asserts the presence and non-zero byte size of required default ROMs (`efi-virtio.rom`, `efi-e1000.rom`) before assembling the APK.
+
+### 6.7. Stage 1 Initramfs Boot Model & `rdinit` Path Architecture (`rootfs.cpio.gz`)
+
+#### 1. The Direct Initramfs Boot Model vs. Block Device Rootfs
+In Linux kernel bootstrapping, there are two primary methods for establishing the root filesystem:
+1. **Block Device Root (`root=/dev/vda` or `root=UUID=...`):** The kernel initializes the VirtIO block driver (`CONFIG_VIRTIO_BLK`), searches the partition table, mounts the block device via `ext4` filesystem drivers, and executes `/sbin/init`. If the block device or root filesystem is missing, unformatted, or corrupted, the kernel encounters an unrecoverable `VFS: Unable to mount root fs on unknown-block(0,0)` panic.
+2. **Direct Initramfs (`rootfs` in `tmpfs` via `-initrd`):** The kernel unpacks a gzip-compressed `newc`-format cpio archive directly into the rootfs memory space (`CONFIG_BLK_DEV_INITRD` + `CONFIG_RD_GZIP`). No physical or virtual block device, partition table, or disk formatting is accessed. This eliminates block storage failure modes during early bring-up, allowing deterministic validation of kernel architecture, interrupt handling, and userspace binaries in under 3 seconds.
+
+#### 2. The `rdinit` Path Requirement (`rdinit=/sbin/init` vs. `/init`)
+- **Default Kernel Behavior:** When an initramfs is loaded, the Linux kernel by default attempts to execute `/init` as PID 1.
+- **Rootfs Layout Mismatch:** Standard distributions designed as container base images (such as `alpine-minirootfs`) contain standard root filesystem hierarchies where BusyBox / OpenRC init is located at `/sbin/init` (symlinked to `/bin/busybox`), with no `/init` script present at the root of the filesystem.
+- **Resolution via `rdinit`:** If the kernel cannot find `/init`, it falls back to root block mounting and promptly panics. Passing `rdinit=/sbin/init` explicitly commands the kernel's initramfs loader to execute `/sbin/init` as the root process inside the unpacked tmpfs. Any custom OS supplied by a user in the future must either provide `/init` or specify its init binary via `rdinit=<path>` in the instance's kernel command line.
+
+#### 3. Kernel Command-Line Parameter Deduplication Discipline
+- **The Issue:** Prepending fixed defaults (such as `console=ttyAMA0 earlycon=pl011,0x09000000 panic=-1`) to user-configured command-line fields resulted in duplicated arguments appearing on the kernel command line in serial logs.
+- **The Engine Fix:** `EngineProvisioner.buildKernelCmdline` implements a token-based deduplication mechanism. Base requirements (`console`, `earlycon`, `panic`, `rdinit`) are tracked in a keyed map. If the instance configuration or user supplies custom values for any of these parameters, the default is superseded without duplication. All additional user flags are appended preserving order.
