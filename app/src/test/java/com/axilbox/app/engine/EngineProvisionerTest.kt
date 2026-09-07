@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import com.axilbox.app.model.OsType
 import com.axilbox.app.model.VirtualInstance
+import com.axilbox.app.util.ResolvedBootResource
 import io.mockk.every
 import io.mockk.mockk
 import org.junit.Assert.assertEquals
@@ -59,16 +60,16 @@ class EngineProvisionerTest {
     }
 
     @Test
-    fun bundledInitrd_resolvesToFilesDirKernelRootfsCpioGz() {
-        val initrd = provisioner.bundledInitrd
+    fun bundledKernelImage_resolvesToFilesDirKernelImage() {
+        val kernel = provisioner.bundledKernelImage
         assertEquals(
-            File(fakeFilesDir, "kernel/rootfs.cpio.gz").absolutePath,
-            initrd.absolutePath
+            File(fakeFilesDir, "kernel/Image").absolutePath,
+            kernel.absolutePath
         )
     }
 
     @Test
-    fun buildKernelCmdline_deduplicatesConsoleAndEarlyconAndIncludesRdinit() {
+    fun buildKernelCmdline_deduplicatesConsoleAndEarlycon() {
         val instanceWithDuplicates = VirtualInstance(
             id = 2L,
             name = "TestCmdline",
@@ -82,18 +83,33 @@ class EngineProvisionerTest {
         assertEquals(1, "console=ttyAMA0".toRegex().findAll(cmdline).count())
         assertEquals(1, "earlycon=pl011,0x09000000".toRegex().findAll(cmdline).count())
         assertEquals(1, "panic=-1".toRegex().findAll(cmdline).count())
-        assertTrue(cmdline.contains("rdinit=/sbin/init"))
         assertTrue(cmdline.contains("custom_arg=1"))
+        // No initrd configured, so rdinit is not present
+        assertFalse(cmdline.contains("rdinit=/sbin/init"))
     }
 
     @Test
-    fun buildQemuArgs_usesNativeLibraryQemuBinaryAndVirtMachine() {
+    fun buildKernelCmdline_includesRdinitWhenInitrdConfigured() {
+        val instanceWithInitrd = VirtualInstance(
+            id = 3L,
+            name = "InitrdInstance",
+            osType = OsType.LINUX_GENERIC,
+            initrdUri = "content://com.android.providers.media.documents/document/123"
+        )
+
+        val cmdline = provisioner.buildKernelCmdline(instanceWithInitrd)
+        assertTrue(cmdline.contains("rdinit=/sbin/init"))
+    }
+
+    @Test
+    fun buildQemuArgs_neverIncludesInitrdWhenNoneConfigured() {
         val instance = VirtualInstance(
             id = 1L,
             name = "TestInstance",
             osType = OsType.AOSP_ARM64,
             ramMb = 2048,
-            vCpuCount = 2
+            vCpuCount = 2,
+            imageUri = "content://media/disk.img"
         )
 
         val args = provisioner.buildQemuArgs(instance)
@@ -107,16 +123,40 @@ class EngineProvisionerTest {
         assertTrue(args.contains("2048M"))
         assertTrue(args.contains("-smp"))
         assertTrue(args.contains("2"))
-        assertTrue(args.contains("-display"))
-        assertTrue(args.contains("none"))
-        assertTrue(args.contains("-monitor"))
-        assertTrue(args.contains("none"))
-        assertTrue(args.contains("-serial"))
-        assertTrue(args.contains("stdio"))
-        assertTrue(args.contains("-append"))
-        val appendIndex = args.indexOf("-append")
-        val cmdline = args[appendIndex + 1]
-        assertTrue(cmdline.contains("rdinit=/sbin/init"))
-        assertEquals(1, "console=ttyAMA0".toRegex().findAll(cmdline).count())
+
+        // Initrd must NOT be present when no initrd is configured
+        assertFalse(args.contains("-initrd"))
+
+        // Disk image must be present
+        assertTrue(args.contains("-drive"))
+        val dIndex = args.indexOf("-drive")
+        assertEquals("file=content://media/disk.img,if=virtio,format=raw", args[dIndex + 1])
+    }
+
+    @Test
+    fun buildQemuArgs_usesSafProcFdWhenBootResourcesPassed() {
+        val instance = VirtualInstance(
+            id = 4L,
+            name = "SafInstance",
+            osType = OsType.DEBIAN_ARM64,
+            ramMb = 1024,
+            vCpuCount = 1,
+            imageUri = "content://saf/disk.raw"
+        )
+
+        val fakeBootResources = InstanceBootResources(
+            diskResource = ResolvedBootResource(path = "/proc/self/fd/42", isDirectFd = true),
+            kernelResource = null,
+            initrdResource = ResolvedBootResource(path = "/proc/self/fd/43", isDirectFd = true)
+        )
+
+        val args = provisioner.buildQemuArgs(instance, bootResources = fakeBootResources)
+
+        // Verifies direct /proc/self/fd passthrough is passed into QEMU -drive and -initrd
+        val dIndex = args.indexOf("-drive")
+        assertEquals("file=/proc/self/fd/42,if=virtio,format=raw", args[dIndex + 1])
+
+        val iIndex = args.indexOf("-initrd")
+        assertEquals("/proc/self/fd/43", args[iIndex + 1])
     }
 }

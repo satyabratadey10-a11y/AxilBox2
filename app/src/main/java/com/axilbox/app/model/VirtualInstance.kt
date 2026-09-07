@@ -50,4 +50,15 @@ data class VirtualInstance(
 
     @ColumnInfo(name = "last_booted_at")
     val lastBootedAt: Long? = null
-)
+) {
+    val diskImageUri: String? get() = imageUri
+    val osImageUri: String? get() = imageUri
+
+    /**
+     * Asserts whether the instance has user-configured boot media (disk image, kernel, or initramfs).
+     * An instance with none of these cannot boot and must be rejected before launch.
+     */
+    fun hasConfiguredBootMedia(): Boolean {
+        return !imageUri.isNullOrBlank() || !kernelUri.isNullOrBlank() || !initrdUri.isNullOrBlank()
+    }
+}

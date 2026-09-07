@@ -197,3 +197,36 @@ The typography system uses Android system sans-serif (`Roboto` / `Inter` fallbac
 - `Virtual Keyboard Toggle` (stubs soft input invocation).
 - `Screenshot Capture` (stubs frame buffer snapshot).
 - `Fullscreen / Immersive Mode Toggle`.
+
+---
+
+## 3. Instance Boot Architecture & Storage Access Model
+
+### 3.1. User-Supplied Guest OS Architecture (Zero Baked-in Rootfs)
+AxilBox packages only the virtualization engine (`libqemu_system_aarch64.so` + Bionic C runtime dependencies + curated `pc-bios` option-ROMs) and the base ARM64 virt Linux kernel `Image`. The APK never bundles or bakes in any guest root filesystem, disk image, or distribution tarball.
+
+Operating system images are strictly instance-specific and supplied by the user per virtual instance:
+- **Disk Image (`imageUri` / `diskImageUri`):** User-selected `.img`, `.qcow2`, or raw block image containing a complete guest distribution.
+- **Custom Kernel (`kernelUri`):** Optional user-supplied kernel binary (e.g. custom build with specific drivers).
+- **Custom Ramdisk (`initrdUri`):** Optional user-supplied `initramfs.cpio.gz`.
+
+### 3.2. Instance Boot Validation & Rejection of Unconfigured Instances
+If a user attempts to boot an instance without configuring boot media (i.e., `imageUri == null && kernelUri == null && initrdUri == null`), the Boot screen and execution pipeline strictly refuse to boot.
+- **UI State:** Status remains `STOPPED` (or transitions cleanly back from `BOOTING`), and the display viewport displays a high-contrast "No OS Configured" error alert.
+- **Telemetry Console:** Emits an explicit error log: `"[AxilBox] Refusing to boot: No OS or boot media configured for instance '<name>'. Please attach a disk image, kernel, or boot media in Instance Settings."`
+- **Zero Silent Fallback:** The engine never substitutes an unrequested guest OS or dummy rootfs behind the user's back.
+
+### 3.3. Android Storage Access Framework (SAF) & `/proc/self/fd/<fd>` Passthrough
+Modern Android (API 29+ / Android 10+) enforces strict Scoped Storage. Direct POSIX filesystem paths (e.g., `/storage/emulated/0/...` or `/sdcard/...`) are inaccessible to third-party apps without broad, non-standard storage permissions that break on modern Android runtimes.
+
+To provide high-performance, direct block device access to external disk images:
+1. **SAF Document Picker:** The user selects external disk images via Android's standard Storage Access Framework (`ActivityResultContracts.OpenDocument()`), yielding a persistent `content://` URI.
+2. **ParcelFileDescriptor Acquisition:** `context.contentResolver.openFileDescriptor(uri, "rw")` opens a direct kernel file descriptor to the selected block storage media (falling back to `"r"` for read-only ISOs).
+3. **Clearing `FD_CLOEXEC`:** On Android, `openFileDescriptor` descriptors are opened with the `FD_CLOEXEC` flag by default, causing the descriptor to close upon executing child processes. AxilBox clears this flag using `android.system.Os.fcntlInt(pfd.fileDescriptor, OsConstants.F_SETFD, 0)` so that child processes inherit the open descriptor across `fork()` and `execve()`.
+4. **`/proc/self/fd/<fd>` QEMU Passthrough:** The open descriptor is exposed to QEMU via `/proc/self/fd/<fd>`:
+   ```bash
+   qemu-system-aarch64 ... -drive file=/proc/self/fd/<fd>,if=virtio,format=raw
+   ```
+   This provides zero-copy, direct block I/O with native performance, eliminating the need to copy multi-gigabyte disk images into internal app storage.
+5. **Session Resource Lifecycle Management:** `InstanceBootResources` holds the open `ParcelFileDescriptor` instances for the entire lifespan of the active QEMU process and automatically closes them when the process terminates.
+6. **Explicit Fallback (`copyUriToCache`):** If direct descriptor passthrough is denied by an unusual third-party content provider, `UriUtils.copyUriToCache` copies the stream to the app-private cache directory as an explicitly labeled fallback.

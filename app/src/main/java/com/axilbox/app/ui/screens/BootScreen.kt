@@ -188,7 +188,8 @@ fun BootScreen(
                     aspectRatio = aspectRatio,
                     bootStatus = bootState.bootStatus,
                     instance = instance,
-                    isLandscape = bootState.isLandscape
+                    isLandscape = bootState.isLandscape,
+                    errorMessage = bootState.errorMessage
                 )
             }
 
@@ -332,7 +333,8 @@ private fun VirtualDisplayContainer(
     aspectRatio: Float,
     bootStatus: InstanceStatus,
     instance: com.axilbox.app.model.VirtualInstance?,
-    isLandscape: Boolean
+    isLandscape: Boolean,
+    errorMessage: String? = null
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "scanline")
     val scanAlpha by infiniteTransition.animateFloat(
@@ -356,22 +358,45 @@ private fun VirtualDisplayContainer(
     ) {
         when (bootStatus) {
             InstanceStatus.STOPPED -> {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        imageVector = Icons.Filled.PowerSettingsNew,
-                        contentDescription = null,
-                        tint = TextSecondary,
-                        modifier = Modifier.size(40.dp)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Guest VM Inactive",
-                        style = AxilBoxTypography.titleSmall.copy(color = TextPrimary)
-                    )
-                    Text(
-                        text = "Tap Power button to start",
-                        style = AxilBoxTypography.bodySmall.copy(color = TextSecondary)
-                    )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    if (errorMessage != null) {
+                        Icon(
+                            imageVector = Icons.Filled.PowerSettingsNew,
+                            contentDescription = null,
+                            tint = Color(0xFFFF5555),
+                            modifier = Modifier.size(40.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "No OS Configured",
+                            style = AxilBoxTypography.titleSmall.copy(color = Color(0xFFFF5555))
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "No OS or boot media configured for this instance.\nPlease attach a disk image, kernel, or boot media in Instance Settings before booting.",
+                            style = AxilBoxTypography.bodySmall.copy(color = TextSecondary),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Filled.PowerSettingsNew,
+                            contentDescription = null,
+                            tint = TextSecondary,
+                            modifier = Modifier.size(40.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Guest VM Inactive",
+                            style = AxilBoxTypography.titleSmall.copy(color = TextPrimary)
+                        )
+                        Text(
+                            text = "Tap Power button to start",
+                            style = AxilBoxTypography.bodySmall.copy(color = TextSecondary)
+                        )
+                    }
                 }
             }
             InstanceStatus.BOOTING -> {

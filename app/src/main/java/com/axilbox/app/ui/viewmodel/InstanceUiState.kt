@@ -55,5 +55,6 @@ data class BootScreenUiState(
     val isLogPaused: Boolean = false,
     val isLandscape: Boolean = false,
     val isTerminalExpanded: Boolean = true,
-    val isPoweringOff: Boolean = false
+    val isPoweringOff: Boolean = false,
+    val errorMessage: String? = null
 )

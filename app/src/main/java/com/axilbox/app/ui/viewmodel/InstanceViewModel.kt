@@ -254,9 +254,31 @@ class InstanceViewModel(
         uptimeJob?.cancel()
 
         bootJob = viewModelScope.launch {
+            // Guard: Assert that instance has user-configured boot media
+            if (!instance.hasConfiguredBootMedia()) {
+                _bootUiState.update {
+                    it.copy(
+                        bootStatus = InstanceStatus.STOPPED,
+                        errorMessage = "No OS configured for this instance",
+                        bootLogs = listOf(
+                            BootLogSimulator.LogEntry(
+                                0.0,
+                                "[AxilBox] Refusing to boot: No OS or boot media configured for instance '${instance.name}'. Please attach a disk image, kernel, or boot media in Instance Settings.",
+                                BootLogSimulator.LogLevel.ERROR
+                            )
+                        ),
+                        uptimeSeconds = 0,
+                        isPoweringOff = false
+                    )
+                }
+                repository.updateStatus(instance.id, InstanceStatus.STOPPED)
+                return@launch
+            }
+
             _bootUiState.update {
                 it.copy(
                     bootStatus = InstanceStatus.BOOTING,
+                    errorMessage = null,
                     bootLogs = listOf(
                         BootLogSimulator.LogEntry(
                             0.0,
@@ -273,9 +295,19 @@ class InstanceViewModel(
             val hasRealEngine = engineProvisioner?.provisionEngineIfNeeded() == true && qemuProcessRunner != null
 
             if (hasRealEngine) {
+                // Resolve SAF ParcelFileDescriptor passthrough resources (/proc/self/fd/<fd>)
+                val bootResources = engineProvisioner!!.resolveInstanceBootResources(instance)
+                val resolutionLogs = bootResources.logMessages.map { msg ->
+                    BootLogSimulator.LogEntry(
+                        0.0,
+                        msg,
+                        if (msg.contains("Warning", ignoreCase = true)) BootLogSimulator.LogLevel.WARN else BootLogSimulator.LogLevel.INFO
+                    )
+                }
+
                 _bootUiState.update { current ->
                     current.copy(
-                        bootLogs = current.bootLogs + BootLogSimulator.LogEntry(
+                        bootLogs = current.bootLogs + resolutionLogs + BootLogSimulator.LogEntry(
                             0.0,
                             "[AxilBox Engine] Native QEMU aarch64 binary verified. Launching guest process...",
                             BootLogSimulator.LogLevel.SUCCESS
@@ -283,13 +315,13 @@ class InstanceViewModel(
                     )
                 }
 
-                val qemuArgs = engineProvisioner!!.buildQemuArgs(instance)
+                val qemuArgs = engineProvisioner.buildQemuArgs(instance, bootResources)
                 _bootUiState.update { it.copy(bootStatus = InstanceStatus.RUNNING) }
                 repository.markBooted(instance.id)
                 startUptimeCounter()
 
                 try {
-                    qemuProcessRunner!!.runQemu(qemuArgs).collect { rawLine ->
+                    qemuProcessRunner!!.runQemu(qemuArgs, listOf(bootResources)).collect { rawLine ->
                         val level = when {
                             rawLine.contains("panic", ignoreCase = true) || rawLine.contains("error", ignoreCase = true) ->
                                 BootLogSimulator.LogLevel.ERROR

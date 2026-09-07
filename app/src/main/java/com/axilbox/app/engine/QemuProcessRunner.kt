@@ -17,21 +17,16 @@ class QemuProcessRunner(
     val isRunning: Boolean
         get() = activeProcess?.isAlive == true
 
-    fun runQemu(args: List<String>): Flow<String> = flow {
+    fun runQemu(
+        args: List<String>,
+        sessionResources: List<AutoCloseable> = emptyList()
+    ): Flow<String> = flow {
         val launchArgs = args.toMutableList()
         if (!launchArgs.contains("-L") && provisioner.pcBiosDir.exists()) {
             if (launchArgs.size > 1) {
                 launchArgs.addAll(1, listOf("-L", provisioner.pcBiosDir.absolutePath))
             } else {
                 launchArgs.addAll(listOf("-L", provisioner.pcBiosDir.absolutePath))
-            }
-        }
-        if (!launchArgs.contains("-initrd") && provisioner.isInitrdAvailable()) {
-            val kIndex = launchArgs.indexOf("-kernel")
-            if (kIndex != -1 && kIndex + 1 < launchArgs.size) {
-                launchArgs.addAll(kIndex + 2, listOf("-initrd", provisioner.bundledInitrd.absolutePath))
-            } else {
-                launchArgs.addAll(listOf("-initrd", provisioner.bundledInitrd.absolutePath))
             }
         }
         val processBuilder = ProcessBuilder(launchArgs)
@@ -67,6 +62,14 @@ class QemuProcessRunner(
             val exitCode = try { process.waitFor() } catch (_: Exception) { -1 }
             emit("[AxilBox Engine] QEMU process terminated with exit code $exitCode")
             activeProcess = null
+            // Close any held session resources (e.g. SAF ParcelFileDescriptors)
+            sessionResources.forEach {
+                try {
+                    it.close()
+                } catch (_: Exception) {
+                    // Ignore close exceptions on cleanup
+                }
+            }
         }
     }.flowOn(Dispatchers.IO)
 

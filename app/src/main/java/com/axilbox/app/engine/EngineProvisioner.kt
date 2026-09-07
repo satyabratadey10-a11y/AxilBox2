@@ -2,10 +2,29 @@ package com.axilbox.app.engine
 
 import android.content.Context
 import com.axilbox.app.model.VirtualInstance
+import com.axilbox.app.util.ResolvedBootResource
+import com.axilbox.app.util.UriUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+
+/**
+ * Manages open boot media resources (such as SAF ParcelFileDescriptors) during the lifetime
+ * of an active QEMU guest session and holds them until termination.
+ */
+data class InstanceBootResources(
+    val diskResource: ResolvedBootResource? = null,
+    val kernelResource: ResolvedBootResource? = null,
+    val initrdResource: ResolvedBootResource? = null,
+    val logMessages: List<String> = emptyList()
+) : AutoCloseable {
+    override fun close() {
+        diskResource?.close()
+        kernelResource?.close()
+        initrdResource?.close()
+    }
+}
 
 class EngineProvisioner(private val context: Context) {
 
@@ -28,15 +47,6 @@ class EngineProvisioner(private val context: Context) {
     val bundledKernelImage: File
         get() = File(kernelDir, "Image")
 
-    val bundledInitrd: File
-        get() {
-            val gz = File(kernelDir, "rootfs.cpio.gz")
-            if (gz.exists() && gz.length() > 0) return gz
-            val cpio = File(kernelDir, "rootfs.cpio")
-            if (cpio.exists() && cpio.length() > 0) return cpio
-            return gz
-        }
-
     val engineDir: File
         get() = File(context.filesDir, "engine")
 
@@ -49,11 +59,6 @@ class EngineProvisioner(private val context: Context) {
 
     fun isKernelAvailable(): Boolean {
         return bundledKernelImage.exists() && bundledKernelImage.length() > 0
-    }
-
-    fun isInitrdAvailable(): Boolean {
-        return (File(kernelDir, "rootfs.cpio.gz").exists() && File(kernelDir, "rootfs.cpio.gz").length() > 0) ||
-               (File(kernelDir, "rootfs.cpio").exists() && File(kernelDir, "rootfs.cpio").length() > 0)
     }
 
     fun isPcBiosAvailable(): Boolean {
@@ -69,8 +74,8 @@ class EngineProvisioner(private val context: Context) {
                 engineDir.mkdirs()
             }
 
-            // Copy bundled guest kernel and initrd from assets to app private storage if not already present
-            if (!isKernelAvailable() || !isInitrdAvailable()) {
+            // Copy bundled guest kernel Image from assets to app private storage if not already present
+            if (!isKernelAvailable()) {
                 copyAssetFolder("kernel", kernelDir)
             }
 
@@ -84,6 +89,70 @@ class EngineProvisioner(private val context: Context) {
         } catch (_: Exception) {
             false
         }
+    }
+
+    /**
+     * Resolves the instance's configured boot media (disk image, kernel, or initramfs)
+     * using SAF ParcelFileDescriptor passthrough (/proc/self/fd/<fd>) with explicit
+     * copyUriToCache fallback.
+     */
+    fun resolveInstanceBootResources(instance: VirtualInstance): InstanceBootResources {
+        val logs = mutableListOf<String>()
+
+        // 1. Resolve disk image if configured
+        val diskRes = if (!instance.imageUri.isNullOrBlank()) {
+            val res = UriUtils.resolveBootResource(context, instance.imageUri, writable = true)
+            if (res != null) {
+                val desc = when {
+                    res.isDirectFd -> "SAF direct descriptor (${res.path})"
+                    res.isFallbackCopy -> "cache copy fallback (${res.path})"
+                    else -> "local file path (${res.path})"
+                }
+                logs.add("[Storage] Disk image mapped via $desc")
+            } else {
+                logs.add("[Storage] Warning: Failed to resolve configured disk image '${instance.imageUri}'")
+            }
+            res
+        } else null
+
+        // 2. Resolve custom kernel image if configured
+        val kernelRes = if (!instance.kernelUri.isNullOrBlank()) {
+            val res = UriUtils.resolveBootResource(context, instance.kernelUri, writable = false)
+            if (res != null) {
+                val desc = when {
+                    res.isDirectFd -> "SAF direct descriptor (${res.path})"
+                    res.isFallbackCopy -> "cache copy fallback (${res.path})"
+                    else -> "local file path (${res.path})"
+                }
+                logs.add("[Kernel] Custom kernel mapped via $desc")
+            } else {
+                logs.add("[Kernel] Warning: Failed to resolve custom kernel URI '${instance.kernelUri}'")
+            }
+            res
+        } else null
+
+        // 3. Resolve custom initramfs if configured
+        val initrdRes = if (!instance.initrdUri.isNullOrBlank()) {
+            val res = UriUtils.resolveBootResource(context, instance.initrdUri, writable = false)
+            if (res != null) {
+                val desc = when {
+                    res.isDirectFd -> "SAF direct descriptor (${res.path})"
+                    res.isFallbackCopy -> "cache copy fallback (${res.path})"
+                    else -> "local file path (${res.path})"
+                }
+                logs.add("[Initrd] Custom initramfs mapped via $desc")
+            } else {
+                logs.add("[Initrd] Warning: Failed to resolve initrd URI '${instance.initrdUri}'")
+            }
+            res
+        } else null
+
+        return InstanceBootResources(
+            diskResource = diskRes,
+            kernelResource = kernelRes,
+            initrdResource = initrdRes,
+            logMessages = logs
+        )
     }
 
     private fun copyAssetFolder(assetPath: String, targetDir: File) {
@@ -115,13 +184,16 @@ class EngineProvisioner(private val context: Context) {
     }
 
     fun buildKernelCmdline(instance: VirtualInstance): String {
-        // Base required parameters for virt machine serial earlycon and initramfs boot
+        // Base required parameters for virt machine serial earlycon
         val baseParams = linkedMapOf(
             "console" to "console=ttyAMA0",
             "earlycon" to "earlycon=pl011,0x09000000",
-            "panic" to "panic=-1",
-            "rdinit" to "rdinit=/sbin/init"
+            "panic" to "panic=-1"
         )
+        // If an initrd is present, include rdinit=/sbin/init as base default
+        if (!instance.initrdUri.isNullOrBlank()) {
+            baseParams["rdinit"] = "rdinit=/sbin/init"
+        }
 
         val userTokens = instance.extraCmdline.trim().split("\\s+".toRegex()).filter { it.isNotBlank() }
         val orderedUserTokens = mutableListOf<String>()
@@ -142,10 +214,14 @@ class EngineProvisioner(private val context: Context) {
 
     fun buildQemuArgs(
         instance: VirtualInstance,
+        bootResources: InstanceBootResources? = null,
         customKernelPath: String? = null,
         customInitrdPath: String? = null
     ): List<String> {
-        val kernelPath = customKernelPath ?: instance.kernelUri ?: bundledKernelImage.absolutePath
+        val kernelPath = customKernelPath
+            ?: bootResources?.kernelResource?.path
+            ?: instance.kernelUri
+            ?: (if (isKernelAvailable()) bundledKernelImage.absolutePath else null)
 
         val args = mutableListOf(
             qemuBinary.absolutePath,
@@ -153,20 +229,28 @@ class EngineProvisioner(private val context: Context) {
             "-M", "virt,gic-version=3",
             "-cpu", "cortex-a57",
             "-smp", instance.vCpuCount.toString(),
-            "-m", "${instance.ramMb}M",
-            "-kernel", kernelPath
+            "-m", "${instance.ramMb}M"
         )
 
-        // Initrd (bundled or custom instance URI)
-        val resolvedInitrd = customInitrdPath ?: instance.initrdUri ?: if (isInitrdAvailable()) bundledInitrd.absolutePath else null
-        if (!resolvedInitrd.isNullOrBlank() && File(resolvedInitrd).exists()) {
+        if (!kernelPath.isNullOrBlank()) {
+            args.addAll(listOf("-kernel", kernelPath))
+        }
+
+        // Initrd: ONLY from custom path, resolved boot resource, or instance.initrdUri.
+        // No baked-in fallback initrd.
+        val resolvedInitrd = customInitrdPath
+            ?: bootResources?.initrdResource?.path
+            ?: instance.initrdUri
+
+        if (!resolvedInitrd.isNullOrBlank()) {
             args.addAll(listOf("-initrd", resolvedInitrd))
         }
 
         // Disk image if supplied
-        if (!instance.imageUri.isNullOrBlank()) {
+        val resolvedDisk = bootResources?.diskResource?.path ?: instance.imageUri
+        if (!resolvedDisk.isNullOrBlank()) {
             args.addAll(listOf(
-                "-drive", "file=${instance.imageUri},if=virtio,format=raw"
+                "-drive", "file=$resolvedDisk,if=virtio,format=raw"
             ))
         }
 

@@ -322,24 +322,65 @@ Once the Android 10+ W^X execution restriction is resolved and dynamic symbol cl
   allowing QEMU to resolve `efi-virtio.rom` and all subsequent device ROMs from the extracted asset directory on Android storage.
 - **Sourcing & CI Enforcement:** The full `pc-bios` tree is extracted directly from the Termux `qemu-common` package alongside `qemu-system-aarch64-headless` in `tools/engine/package-termux-qemu.sh`. Job 2 strictly asserts the presence and non-zero byte size of required default ROMs (`efi-virtio.rom`, `efi-e1000.rom`) before assembling the APK.
 
-### 6.7. Stage 1 Initramfs Boot Model & `rdinit` Path Architecture (`rootfs.cpio.gz`)
+### 6.7. Stage 1 Kernel Boot Model & Guest OS Boundary Separation
 
-#### 1. The Direct Initramfs Boot Model vs. Block Device Rootfs
-In Linux kernel bootstrapping, there are two primary methods for establishing the root filesystem:
-1. **Block Device Root (`root=/dev/vda` or `root=UUID=...`):** The kernel initializes the VirtIO block driver (`CONFIG_VIRTIO_BLK`), searches the partition table, mounts the block device via `ext4` filesystem drivers, and executes `/sbin/init`. If the block device or root filesystem is missing, unformatted, or corrupted, the kernel encounters an unrecoverable `VFS: Unable to mount root fs on unknown-block(0,0)` panic.
-2. **Direct Initramfs (`rootfs` in `tmpfs` via `-initrd`):** The kernel unpacks a gzip-compressed `newc`-format cpio archive directly into the rootfs memory space (`CONFIG_BLK_DEV_INITRD` + `CONFIG_RD_GZIP`). No physical or virtual block device, partition table, or disk formatting is accessed. This eliminates block storage failure modes during early bring-up, allowing deterministic validation of kernel architecture, interrupt handling, and userspace binaries in under 3 seconds.
+#### 1. The Kernel Bring-Up vs. Guest OS Separation
+In Stage 1 of the guest engine, the primary objective is validating that the ARM64 virtualization engine (QEMU `virt` machine) boots an authentic Linux kernel (`Image`) on physical Android hardware and establishes bidirectional communication across the PL011 UART (`ttyAMA0`).
 
-#### 2. The `rdinit` Path Requirement (`rdinit=/sbin/init` vs. `/init`)
-- **Default Kernel Behavior:** When an initramfs is loaded, the Linux kernel by default attempts to execute `/init` as PID 1.
-- **Rootfs Layout Mismatch:** Standard distributions designed as container base images (such as `alpine-minirootfs`) contain standard root filesystem hierarchies where BusyBox / OpenRC init is located at `/sbin/init` (symlinked to `/bin/busybox`), with no `/init` script present at the root of the filesystem.
-- **Resolution via `rdinit`:** If the kernel cannot find `/init`, it falls back to root block mounting and promptly panics. Passing `rdinit=/sbin/init` explicitly commands the kernel's initramfs loader to execute `/sbin/init` as the root process inside the unpacked tmpfs. Any custom OS supplied by a user in the future must either provide `/init` or specify its init binary via `rdinit=<path>` in the instance's kernel command line.
+During early experimentation (commit `17be8c0`), an Alpine Linux minirootfs was converted to a `.cpio.gz` initramfs to prevent the kernel from halting at `VFS: Unable to mount root fs`. However, AxilBox2 strictly defines a clean architectural boundary:
+- **APK Bundled Components:** The APK bundles **only** the virtualization engine (`libqemu_system_aarch64.so` + Bionic C dependencies + curated `pc-bios` option-ROMs) and the base ARM64 virt Linux kernel `Image` (needed for direct kernel boot).
+- **Guest OS Components:** The APK **never** bundles a rootfs, disk image, or distribution tarball. All guest operating systems are strictly user-supplied per virtual instance.
+- **Kernel Capabilities Retained:** `CONFIG_BLK_DEV_INITRD` and `CONFIG_RD_GZIP` remain enabled in the compiled kernel (`tools/kernel/configure-virt-kernel.sh`) so that when a user provides an initramfs, the kernel unpacks and runs it seamlessly.
+- **Deduplicated Command-Line Architecture:** `EngineProvisioner.buildKernelCmdline` implements token-based deduplication (`console=ttyAMA0`, `earlycon=pl011,0x09000000`, `panic=-1`), ensuring parameters are never duplicated in the guest command line. `rdinit=/sbin/init` is only emitted when an initramfs is actually configured for the instance.
 
-#### 3. Kernel Command-Line Parameter Deduplication Discipline
-- **The Issue:** Prepending fixed defaults (such as `console=ttyAMA0 earlycon=pl011,0x09000000 panic=-1`) to user-configured command-line fields resulted in duplicated arguments appearing on the kernel command line in serial logs.
-- **The Engine Fix:** `EngineProvisioner.buildKernelCmdline` implements a token-based deduplication mechanism. Base requirements (`console`, `earlycon`, `panic`, `rdinit`) are tracked in a keyed map. If the instance configuration or user supplies custom values for any of these parameters, the default is superseded without duplication. All additional user flags are appended preserving order.
+---
 
-#### 4. AAPT2 Asset Preservation & Dual-Format Initramfs Handling
-- **AAPT2 Compression Behavior:** By default, Android Asset Packaging Tool 2 (AAPT2) decompresses `.gz` files placed in `assets/` and strips the `.gz` extension during APK assembly, causing file name mismatches and unnecessary APK inflation.
-- **`noCompress` Configuration:** In `app/build.gradle.kts`, `androidResources.noCompress.addAll(listOf("gz", "cpio", "rom", "bin", "fd"))` instructs AAPT2 to store compressed archives and firmware ROMs verbatim without recompression or name stripping.
-- **Runtime Fallback:** `EngineProvisioner.bundledInitrd` and `isInitrdAvailable()` dynamically probe for both `rootfs.cpio.gz` and `rootfs.cpio`, ensuring the engine provisions and boots the guest initramfs regardless of the packaging state.
+### 6.8. Storage Access Framework (SAF) & `/proc/self/fd/<fd>` Passthrough Architecture
+
+#### 1. The Scoped Storage Barrier on Modern Android (API 29+)
+On modern Android (API 29 / Android 10 and above), Google enforces strict Scoped Storage:
+- Apps can no longer access shared storage directories (e.g., `/storage/emulated/0/...` or `/sdcard/...`) using raw POSIX filesystem paths without broad, deprecated, or restricted permissions (`MANAGE_EXTERNAL_STORAGE`) that violate Google Play policies and fail on modern Android runtimes.
+- Attempting to pass a raw path like `/storage/emulated/0/Download/alpine.img` directly to QEMU's `-drive file=...` fails immediately with `EACCES (Permission denied)` because the Linux kernel blocks POSIX filesystem access at the VFS layer for untrusted app processes.
+
+#### 2. The Storage Access Framework (SAF) Document Model
+When a user selects a guest disk image (`.img`, `.raw`, `.qcow2`), kernel (`Image`), or initramfs (`initrd.img`) through Android's system file picker (`ActivityResultContracts.OpenDocument()`), the app receives a `content://` URI (e.g., `content://com.android.providers.media.documents/document/1234`).
+
+QEMU is a native C binary that expects POSIX file paths or descriptors—it cannot consume Android Java `content://` URIs directly.
+
+#### 3. The `/proc/self/fd/<fd>` Passthrough Mechanism
+To bridge Android's SAF and QEMU without copying gigabytes of disk images into internal app storage:
+1. **`ParcelFileDescriptor` Acquisition:**
+   ```kotlin
+   val mode = if (writable) "rw" else "r"
+   val pfd = context.contentResolver.openFileDescriptor(uri, mode)
+   ```
+   The Android OS opens the underlying storage node inside the Media/Storage Provider and returns an active kernel file descriptor (`int rawFd = pfd.fd`) directly into the calling app process.
+2. **Clearing `FD_CLOEXEC`:**
+   By default, Android opens Binder-mediated file descriptors with the `FD_CLOEXEC` (close-on-exec) flag set. If this flag remains set, the descriptor is automatically closed by the Linux kernel when `ProcessBuilder.start()` invokes `execve()` to launch the QEMU binary. AxilBox explicitly clears `FD_CLOEXEC`:
+   ```kotlin
+   android.system.Os.fcntlInt(pfd.fileDescriptor, android.system.OsConstants.F_SETFD, 0)
+   ```
+   This ensures that the child QEMU process inherits the open file descriptor across `fork()` and `execve()`.
+3. **`/proc/self/fd/<fd>` Formatting:**
+   In Linux, `/proc/self/fd/<fd>` is a magic symlink that references the process's open file descriptor table. By passing `/proc/self/fd/<rawFd>` to QEMU:
+   ```bash
+   libqemu_system_aarch64.so ... -drive file=/proc/self/fd/42,if=virtio,format=raw
+   ```
+   QEMU performs native `pread64()`, `pwrite64()`, and `fstat()` system calls directly against the open descriptor. This achieves zero-copy, direct block I/O with maximum throughput and zero flash write wear.
+4. **Session Descriptor Lifecycle:**
+   The `InstanceBootResources` structure encapsulates all open `ParcelFileDescriptor` instances for the disk, kernel, and initramfs. `QemuProcessRunner` holds these descriptors for the entire duration of the guest session and guarantees their closure via an `AutoCloseable` `finally` block when the QEMU process terminates.
+5. **Explicit Fallback (`copyUriToCache`):**
+   If direct descriptor access fails due to restricted third-party cloud storage providers (e.g. Google Drive SAF providers that do not provide seekable file descriptors), AxilBox provides an explicitly labeled fallback (`UriUtils.copyUriToCache`), streaming the content into the app-private cache directory and logging:
+   ```
+   [Fallback copyUriToCache] SAF direct descriptor unavailable. Copied stream to app cache.
+   ```
+
+#### 4. Instance Boot Validation Rule
+If an instance has no boot media configured (`imageUri == null && kernelUri == null && initrdUri == null`):
+- The Boot screen strictly refuses to initiate QEMU execution.
+- Status remains `STOPPED`, and an explicit error alert is rendered in the UI and logged to the telemetry console:
+  ```
+  [AxilBox] Refusing to boot: No OS or boot media configured for instance '<name>'. Please attach a disk image, kernel, or boot media in Instance Settings.
+  ```
+- No fallback rootfs or dummy image is ever substituted.
 
