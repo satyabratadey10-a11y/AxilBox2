@@ -63,11 +63,17 @@ object UriUtils {
             Uri.parse(uriString)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse URI string '$uriString': ${e.message}")
-            return null
+            null
+        } ?: return null
+
+        val scheme = uri.scheme ?: when {
+            uriString.startsWith("content://") -> "content"
+            uriString.startsWith("file://") -> "file"
+            else -> ""
         }
 
         // 2. Storage Access Framework (SAF) ParcelFileDescriptor Passthrough
-        if (uri.scheme == "content" || uri.scheme == "file") {
+        if (scheme == "content" || scheme == "file") {
             try {
                 val mode = if (writable) "rw" else "r"
                 var pfd: ParcelFileDescriptor? = null

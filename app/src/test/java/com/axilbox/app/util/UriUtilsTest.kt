@@ -6,7 +6,10 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkStatic
 import io.mockk.verify
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -30,9 +33,28 @@ class UriUtilsTest {
 
     @Before
     fun setup() {
+        mockkStatic(Uri::class)
+        every { Uri.parse(any()) } answers {
+            val str = firstArg<String>()
+            val mUri: Uri = mockk(relaxed = true)
+            val scheme = when {
+                str.startsWith("content://") -> "content"
+                str.startsWith("file://") -> "file"
+                else -> null
+            }
+            every { mUri.scheme } returns scheme
+            every { mUri.toString() } returns str
+            mUri
+        }
+
         cacheDir = tempFolder.newFolder("cache")
         every { context.cacheDir } returns cacheDir
         every { context.contentResolver } returns contentResolver
+    }
+
+    @After
+    fun tearDown() {
+        unmockkStatic(Uri::class)
     }
 
     @Test
@@ -56,12 +78,12 @@ class UriUtilsTest {
 
     @Test
     fun resolveBootResource_whenSafPfdSucceeds_returnsProcSelfFd() {
-        val uri = Uri.parse("content://com.android.providers.media.documents/document/101")
+        val uriStr = "content://com.android.providers.media.documents/document/101"
         val mockPfd: ParcelFileDescriptor = mockk(relaxed = true)
         every { mockPfd.fd } returns 33
-        every { contentResolver.openFileDescriptor(uri, "rw") } returns mockPfd
+        every { contentResolver.openFileDescriptor(any(), "rw") } returns mockPfd
 
-        val res = UriUtils.resolveBootResource(context, uri.toString(), writable = true)
+        val res = UriUtils.resolveBootResource(context, uriStr, writable = true)
         assertNotNull(res)
         assertEquals("/proc/self/fd/33", res?.path)
         assertTrue(res?.isDirectFd ?: false)
@@ -73,11 +95,11 @@ class UriUtilsTest {
 
     @Test
     fun resolveBootResource_whenSafFails_fallsBackToCopyUriToCache() {
-        val uri = Uri.parse("content://com.example.provider/image.iso")
-        every { contentResolver.openFileDescriptor(uri, any()) } throws SecurityException("Permission denied")
-        every { contentResolver.openInputStream(uri) } returns ByteArrayInputStream("iso payload bytes".toByteArray())
+        val uriStr = "content://com.example.provider/image.iso"
+        every { contentResolver.openFileDescriptor(any(), any()) } throws SecurityException("Permission denied")
+        every { contentResolver.openInputStream(any()) } returns ByteArrayInputStream("iso payload bytes".toByteArray())
 
-        val res = UriUtils.resolveBootResource(context, uri.toString(), writable = false)
+        val res = UriUtils.resolveBootResource(context, uriStr, writable = false)
         assertNotNull(res)
         assertTrue(res?.path?.contains("saf_fallback") == true)
         assertFalse(res?.isDirectFd ?: true)
@@ -91,7 +113,7 @@ class UriUtilsTest {
     @Test
     fun copyUriToCache_copiesStreamToPrivateCacheDir() {
         val uri = Uri.parse("content://com.example/test.bin")
-        every { contentResolver.openInputStream(uri) } returns ByteArrayInputStream("binary content".toByteArray())
+        every { contentResolver.openInputStream(any()) } returns ByteArrayInputStream("binary content".toByteArray())
 
         val file = UriUtils.copyUriToCache(context, uri)
         assertNotNull(file)
