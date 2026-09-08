@@ -1,6 +1,7 @@
 package com.axilbox.app.model
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -41,6 +42,45 @@ class ModelValidationTest {
         assertEquals("PORTRAIT", instance.displayOrientation)
         assertTrue(instance.serialConsoleLogging)
         assertNotNull(instance.createdAt)
+    }
+
+    @Test
+    fun hasConfiguredBootMedia_validatesPresenceOfBootMedia() {
+        val bare = VirtualInstance(
+            name = "Bare",
+            osType = OsType.AOSP_ARM64
+        )
+        assertFalse(bare.hasConfiguredBootMedia())
+
+        val blankUris = VirtualInstance(
+            name = "Blank",
+            osType = OsType.AOSP_ARM64,
+            imageUri = "   ",
+            kernelUri = "",
+            initrdUri = null
+        )
+        assertFalse(blankUris.hasConfiguredBootMedia())
+
+        val withDisk = VirtualInstance(
+            name = "WithDisk",
+            osType = OsType.AOSP_ARM64,
+            imageUri = "content://saf/disk.img"
+        )
+        assertTrue(withDisk.hasConfiguredBootMedia())
+
+        val withKernel = VirtualInstance(
+            name = "WithKernel",
+            osType = OsType.LINUX_GENERIC,
+            kernelUri = "content://saf/vmlinux"
+        )
+        assertTrue(withKernel.hasConfiguredBootMedia())
+
+        val withInitrd = VirtualInstance(
+            name = "WithInitrd",
+            osType = OsType.DEBIAN_ARM64,
+            initrdUri = "content://saf/initramfs.cpio.gz"
+        )
+        assertTrue(withInitrd.hasConfiguredBootMedia())
     }
 
     @Test

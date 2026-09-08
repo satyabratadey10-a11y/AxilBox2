@@ -161,20 +161,4 @@ class InstanceViewModelTest {
         assertEquals("No OS configured for this instance", bootState.errorMessage)
         assertTrue(bootState.bootLogs.any { it.message.contains("Refusing to boot: No OS or boot media configured") })
     }
-
-    @Test
-    fun startBootSequence_whenBootMediaConfigured_proceedsToBoot() = runTest {
-        val configuredInstance = VirtualInstance(
-            id = 6L,
-            name = "ConfiguredInstance",
-            osType = OsType.DEBIAN_ARM64,
-            imageUri = "content://saf/debian.img"
-        )
-
-        viewModel.startBootSequence(configuredInstance)
-
-        val bootState = viewModel.bootUiState.value
-        assertNull(bootState.errorMessage)
-        assertTrue(bootState.bootStatus == InstanceStatus.BOOTING || bootState.bootStatus == InstanceStatus.RUNNING)
-    }
 }

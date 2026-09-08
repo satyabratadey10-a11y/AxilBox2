@@ -487,6 +487,7 @@ jobs:
     name: "Job 3 — App Build & Host QEMU Kernel Sanity Check"
     runs-on: ubuntu-latest
     needs: [build-kernel, build-qemu]
+    timeout-minutes: 20
     permissions:
       contents: read
 
