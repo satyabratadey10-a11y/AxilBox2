@@ -19,7 +19,12 @@ curl -sSL "${PACKAGES_INDEX_URL}" -o "${WORK_DIR}/Packages" || {
     curl -sSL "https://raw.githubusercontent.com/termux/termux-packages/gh-pages/dists/stable/main/binary-aarch64/Packages" -o "${WORK_DIR}/Packages"
 }
 
+echo "[1.5/4] Compiling native engine bridge library (libaxilbox-native.so)..."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"${SCRIPT_DIR}/build-native-bridge.sh" "${OUTPUT_DIR}"
+
 echo "[2/4] Resolving and downloading targeted recursive dependency closure..."
+
 
 WORK_DIR="${WORK_DIR}" OUTPUT_DIR="${OUTPUT_DIR}" ASSETS_DIR="${ASSETS_DIR}" APT_REPO="${APT_REPO}" python3 - <<'PY_SCRIPT'
 import os

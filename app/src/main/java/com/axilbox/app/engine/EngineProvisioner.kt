@@ -24,6 +24,17 @@ data class InstanceBootResources(
         kernelResource?.close()
         initrdResource?.close()
     }
+
+    /**
+     * Returns the list of active integer file descriptors opened via SAF passthrough.
+     */
+    fun getActiveFds(): List<Int> {
+        return listOfNotNull(
+            diskResource?.takeIf { it.isDirectFd }?.pfd?.fd,
+            kernelResource?.takeIf { it.isDirectFd }?.pfd?.fd,
+            initrdResource?.takeIf { it.isDirectFd }?.pfd?.fd
+        ).filter { it >= 0 }
+    }
 }
 
 class EngineProvisioner(private val context: Context) {

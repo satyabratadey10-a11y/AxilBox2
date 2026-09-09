@@ -13,13 +13,15 @@ class QemuProcessRunner(
     private val provisioner: EngineProvisioner
 ) {
     private var activeProcess: Process? = null
+    private var activeNativePid: Int? = null
 
     val isRunning: Boolean
-        get() = activeProcess?.isAlive == true
+        get() = activeProcess?.isAlive == true || (activeNativePid != null && activeNativePid!! > 0)
 
     fun runQemu(
         args: List<String>,
-        sessionResources: List<AutoCloseable> = emptyList()
+        sessionResources: List<AutoCloseable> = emptyList(),
+        preservedFds: List<Int> = emptyList()
     ): Flow<String> = flow {
         val launchArgs = args.toMutableList()
         if (!launchArgs.contains("-L") && provisioner.pcBiosDir.exists()) {
@@ -29,45 +31,127 @@ class QemuProcessRunner(
                 launchArgs.addAll(listOf("-L", provisioner.pcBiosDir.absolutePath))
             }
         }
-        val processBuilder = ProcessBuilder(launchArgs)
+
         val workingDir = provisioner.kernelDir.parentFile ?: provisioner.kernelDir
-        processBuilder.directory(workingDir)
-
-        val env = processBuilder.environment()
-        val existingLd = env["LD_LIBRARY_PATH"] ?: ""
         val nativeLd = provisioner.nativeLibDir.absolutePath
-        env["LD_LIBRARY_PATH"] = if (existingLd.isNotEmpty()) "$nativeLd:$existingLd" else nativeLd
-        
+        val existingLd = System.getenv("LD_LIBRARY_PATH") ?: ""
+        val targetLd = if (existingLd.isNotEmpty()) "$nativeLd:$existingLd" else nativeLd
         val tmpDir = File(workingDir, "cache").apply { mkdirs() }
-        env["TMPDIR"] = tmpDir.absolutePath
 
-        processBuilder.redirectErrorStream(true)
+        // Check if SAF file descriptors need to survive into QEMU
+        // Either passed explicitly via preservedFds or parsed from /proc/self/fd/ in launchArgs
+        val explicitFds = (preservedFds + extractProcFds(launchArgs)).distinct()
+        val needsNativeSpawn = explicitFds.isNotEmpty()
 
-        val process = processBuilder.start()
-        activeProcess = process
+        if (needsNativeSpawn && NativeEngineBridge.isLoaded) {
+            emit("[AxilBox Engine] Preserved SAF FDs detected: $explicitFds. Launching via native fork()+execve()...")
+            val envp = listOf(
+                "LD_LIBRARY_PATH=$targetLd",
+                "TMPDIR=${tmpDir.absolutePath}",
+                "PATH=${System.getenv("PATH") ?: "/system/bin"}"
+            )
 
-        emit("[AxilBox Engine] QEMU process started (PID: ${getProcessPid(process)})")
+            val qemuBinaryPath = launchArgs[0]
+            val spawnResult = NativeEngineBridge.forkAndExecQemu(
+                qemuPath = qemuBinaryPath,
+                argv = launchArgs,
+                envp = envp,
+                workingDir = workingDir.absolutePath,
+                preservedFds = explicitFds.toIntArray()
+            )
 
-        val reader = BufferedReader(InputStreamReader(process.inputStream))
-        try {
-            var line: String? = reader.readLine()
-            while (line != null) {
-                emit(line)
-                line = reader.readLine()
+            if (spawnResult == null || spawnResult.pid <= 0) {
+                emit("[AxilBox Engine] ERROR: Native forkAndExecQemu failed to launch process!")
+                sessionResources.forEach {
+                    try {
+                        it.close()
+                    } catch (_: Exception) {}
+                }
+                return@flow
             }
-        } catch (_: Exception) {
-            // Stream closed
-        } finally {
-            reader.close()
-            val exitCode = try { process.waitFor() } catch (_: Exception) { -1 }
-            emit("[AxilBox Engine] QEMU process terminated with exit code $exitCode")
-            activeProcess = null
-            // Close any held session resources (e.g. SAF ParcelFileDescriptors)
-            sessionResources.forEach {
+
+            activeNativePid = spawnResult.pid
+            emit("[AxilBox Engine] QEMU process started via native fork+exec (PID: ${spawnResult.pid})")
+
+            val pfd = try {
+                android.os.ParcelFileDescriptor.adoptFd(spawnResult.stdoutFd)
+            } catch (t: Throwable) {
+                null
+            }
+
+            if (pfd != null) {
+                val inputStream = android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd)
+                val reader = BufferedReader(InputStreamReader(inputStream))
                 try {
-                    it.close()
+                    var line: String? = reader.readLine()
+                    while (line != null) {
+                        emit(line)
+                        line = reader.readLine()
+                    }
                 } catch (_: Exception) {
-                    // Ignore close exceptions on cleanup
+                    // Stream closed
+                } finally {
+                    reader.close()
+                    val exitCode = NativeEngineBridge.waitForProcess(spawnResult.pid)
+                    emit("[AxilBox Engine] QEMU process terminated with exit code $exitCode")
+                    activeNativePid = null
+                    sessionResources.forEach {
+                        try {
+                            it.close()
+                        } catch (_: Exception) {}
+                    }
+                }
+            } else {
+                emit("[AxilBox Engine] ERROR: Failed to adopt stdout pipe descriptor (fd=${spawnResult.stdoutFd})")
+                val exitCode = NativeEngineBridge.waitForProcess(spawnResult.pid)
+                emit("[AxilBox Engine] QEMU process terminated with exit code $exitCode")
+                activeNativePid = null
+                sessionResources.forEach {
+                    try {
+                        it.close()
+                    } catch (_: Exception) {}
+                }
+            }
+        } else {
+            if (needsNativeSpawn && !NativeEngineBridge.isLoaded) {
+                emit("[AxilBox Engine] WARN: SAF FDs present but native bridge not loaded; falling back to ProcessBuilder.")
+            }
+            val processBuilder = ProcessBuilder(launchArgs)
+            processBuilder.directory(workingDir)
+
+            val env = processBuilder.environment()
+            val pExistingLd = env["LD_LIBRARY_PATH"] ?: ""
+            env["LD_LIBRARY_PATH"] = if (pExistingLd.isNotEmpty()) "$nativeLd:$pExistingLd" else nativeLd
+            env["TMPDIR"] = tmpDir.absolutePath
+
+            processBuilder.redirectErrorStream(true)
+
+            val process = processBuilder.start()
+            activeProcess = process
+
+            emit("[AxilBox Engine] QEMU process started (PID: ${getProcessPid(process)})")
+
+            val reader = BufferedReader(InputStreamReader(process.inputStream))
+            try {
+                var line: String? = reader.readLine()
+                while (line != null) {
+                    emit(line)
+                    line = reader.readLine()
+                }
+            } catch (_: Exception) {
+                // Stream closed
+            } finally {
+                reader.close()
+                val exitCode = try { process.waitFor() } catch (_: Exception) { -1 }
+                emit("[AxilBox Engine] QEMU process terminated with exit code $exitCode")
+                activeProcess = null
+                // Close any held session resources (e.g. SAF ParcelFileDescriptors)
+                sessionResources.forEach {
+                    try {
+                        it.close()
+                    } catch (_: Exception) {
+                        // Ignore close exceptions on cleanup
+                    }
                 }
             }
         }
@@ -82,6 +166,24 @@ class QemuProcessRunner(
             }
         }
         activeProcess = null
+
+        activeNativePid?.let { pid ->
+            try {
+                NativeEngineBridge.killProcess(pid, 15)
+            } catch (_: Exception) {
+                // Ignore
+            }
+        }
+        activeNativePid = null
+    }
+
+    private fun extractProcFds(args: List<String>): List<Int> {
+        val regex = """/proc/self/fd/(\d+)""".toRegex()
+        return args.flatMap { arg ->
+            regex.findAll(arg).mapNotNull { match ->
+                match.groupValues[1].toIntOrNull()
+            }
+        }
     }
 
     private fun getProcessPid(process: Process): Long {

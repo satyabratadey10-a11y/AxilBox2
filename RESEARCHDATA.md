@@ -384,3 +384,39 @@ If an instance has no boot media configured (`imageUri == null && kernelUri == n
   ```
 - No fallback rootfs or dummy image is ever substituted.
 
+### 6.9. The Android ProcessBuilder File Descriptor Drop Limitation and Native fork()+execve() Architecture
+
+#### 1. The ProcessBuilder File Descriptor Drop Behavior
+On Android, Java's `java.lang.ProcessBuilder` (backed by Android libcore / OpenJDK `ProcessImpl`) introduces a critical barrier to zero-copy file descriptor passthrough:
+- Even when `FD_CLOEXEC` is explicitly cleared in Kotlin via `android.system.Os.fcntlInt(fd, F_SETFD, 0)`, `ProcessImpl.start()` executes an internal descriptor cleanup loop in the forked child process prior to calling `execve()`.
+- The runtime automatically iterates through `/proc/self/fd` (or closes all descriptors above `STDERR_FILENO`) to prevent descriptor leaks from the JVM into untrusted subprocesses.
+- As a result, when QEMU starts in the child process and attempts to open `/proc/self/fd/146`, the descriptor has already been closed by the Java runtime, resulting in:
+  ```
+  qemu-system-aarch64: -drive file=/proc/self/fd/146,if=virtio,format=raw: Could not open '/proc/self/fd/146': No such file or directory
+  ```
+
+#### 2. Native `fork()` + `execve()` Implementation
+To guarantee that user-selected SAF file descriptors survive intact into the QEMU engine, AxilBox replaces `ProcessBuilder` with a direct native POSIX launcher implemented in `app/src/main/cpp/native.cpp` and exposed through `NativeEngineBridge`:
+
+1. **Parent JNI Pre-Processing:**
+   All arguments (`argv`), environment variables (`LD_LIBRARY_PATH`, `TMPDIR`, `PATH`), working directory, and the array of integer file descriptors to preserve (`preservedFds`) are extracted from JNI into native C structures prior to `fork()`. No JNI functions are called in the child process (which would be unsafe in a multi-threaded JVM process).
+2. **Output Capture Pipe:**
+   A unidirectional pipe is created via `pipe2(out_pipe, O_CLOEXEC)`. The child redirects its `STDOUT_FILENO` and `STDERR_FILENO` to the write end of the pipe using `dup2()`. The parent adopts the read end via `ParcelFileDescriptor.adoptFd(stdoutFd)` and streams output into Kotlin coroutines via `ParcelFileDescriptor.AutoCloseInputStream`.
+3. **Child In-Process FD Verification & Diagnostics:**
+   Inside the child process before `execve()`:
+   - For every required fd in `preservedFds`, the child queries `fcntl(fd, F_GETFD)`.
+   - If `FD_CLOEXEC` is present, it is defensively cleared via `fcntl(fd, F_SETFD, 0)`.
+   - A startup diagnostic reads the link target via `readlink("/proc/self/fd/<N>")` and emits:
+     ```
+     [AxilBox Native Child] OK: fd 146 confirmed open with FD_CLOEXEC=0
+     [AxilBox Native Child] DIAGNOSTIC: /proc/self/fd/146 -> /storage/emulated/0/Download/disk.img
+     ```
+     This appears in both the serial console stream and logcat, allowing instant debugging of the child process's real VFS view.
+4. **Direct `execve()`:**
+   The child executes `execve(qemu_binary_path, argv, envp)`. If execution fails, it writes `errno` and `strerror()` directly to the error stream and calls `_exit(127)`.
+
+#### 3. Execution Path Routing in `QemuProcessRunner`
+- **SAF Passthrough Launches:** When any argument contains `/proc/self/fd/<N>` or `preservedFds` is non-empty, `QemuProcessRunner` routes execution through `NativeEngineBridge.forkAndExecQemu()`.
+- **Plain File Launches / JVM Fallback:** When no file descriptors are passed (e.g., standard internal storage boot files or headless unit test environments where the native `.so` is not loaded), `QemuProcessRunner` uses the standard `ProcessBuilder` path.
+
+

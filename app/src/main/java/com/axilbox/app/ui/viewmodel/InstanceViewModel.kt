@@ -321,7 +321,8 @@ class InstanceViewModel(
                 startUptimeCounter()
 
                 try {
-                    qemuProcessRunner!!.runQemu(qemuArgs, listOf(bootResources)).collect { rawLine ->
+                    val activeFds = bootResources.getActiveFds()
+                    qemuProcessRunner!!.runQemu(qemuArgs, listOf(bootResources), activeFds).collect { rawLine ->
                         val level = when {
                             rawLine.contains("panic", ignoreCase = true) || rawLine.contains("error", ignoreCase = true) ->
                                 BootLogSimulator.LogLevel.ERROR

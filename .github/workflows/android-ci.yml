@@ -578,6 +578,8 @@ jobs:
           assert any("efi-virtio.rom" in n for n in names), "FATAL: efi-virtio.rom missing from APK!"
           assert any("efi-e1000.rom" in n for n in names), "FATAL: efi-e1000.rom missing from APK!"
           assert any("assets/kernel/Image" in n for n in names), "FATAL: assets/kernel/Image missing from APK!"
+          assert any("libaxilbox-native.so" in n for n in names), "FATAL: libaxilbox-native.so missing from APK!"
+          assert any("libqemu_system_aarch64.so" in n for n in names), "FATAL: libqemu_system_aarch64.so missing from APK!"
           assert not any("rootfs" in n for n in names), "FATAL: Guest rootfs found in APK! Guest OS content must not be bundled!"
           assert not any(n.endswith(".cpio") or n.endswith(".cpio.gz") for n in names), "FATAL: cpio archive found in APK!"
 

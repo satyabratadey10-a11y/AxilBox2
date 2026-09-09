@@ -159,4 +159,21 @@ class EngineProvisionerTest {
         val iIndex = args.indexOf("-initrd")
         assertEquals("/proc/self/fd/43", args[iIndex + 1])
     }
+
+    @Test
+    fun instanceBootResources_getActiveFds_extractsOnlyDirectFds() {
+        val fakePfd42: android.os.ParcelFileDescriptor = io.mockk.mockk(relaxed = true)
+        io.mockk.every { fakePfd42.fd } returns 42
+        val fakePfd43: android.os.ParcelFileDescriptor = io.mockk.mockk(relaxed = true)
+        io.mockk.every { fakePfd43.fd } returns 43
+
+        val resources = InstanceBootResources(
+            diskResource = ResolvedBootResource(path = "/proc/self/fd/42", pfd = fakePfd42, isDirectFd = true),
+            kernelResource = ResolvedBootResource(path = "/data/local/Image", pfd = null, isDirectFd = false),
+            initrdResource = ResolvedBootResource(path = "/proc/self/fd/43", pfd = fakePfd43, isDirectFd = true)
+        )
+
+        val activeFds = resources.getActiveFds()
+        assertEquals(listOf(42, 43), activeFds)
+    }
 }
