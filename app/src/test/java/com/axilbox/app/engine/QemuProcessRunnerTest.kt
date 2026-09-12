@@ -72,4 +72,18 @@ class QemuProcessRunnerTest {
         // Verifies runner handled the request and either emitted process started or fallback warning
         assertTrue(logs.isNotEmpty())
     }
+
+    @Test
+    fun runQemu_withAddFd_fallsBackGracefullyWhenNativeNotLoaded() = runTest {
+        val testEcho = if (File("/bin/echo").exists()) "/bin/echo" else "echo"
+        val launchArgs = listOf(testEcho, "-add-fd", "fd=99,set=0", "-drive", "file=/dev/fdset/0,if=virtio,format=raw")
+
+        val logs = runner.runQemu(
+            args = launchArgs,
+            sessionResources = emptyList()
+        ).take(3).toList()
+
+        assertNotNull(logs)
+        assertTrue(logs.isNotEmpty())
+    }
 }

@@ -596,6 +596,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y qemu-system-arm qemu-system-misc
 
+      - name: Verify QEMU -add-fd and /dev/fdset Support
+        run: |
+          echo "=== Verifying QEMU -add-fd CLI Support on Host Runner ==="
+          qemu-system-aarch64 --help | grep -A 2 -- "-add-fd" || (echo "FATAL: -add-fd option not found in host qemu-system-aarch64 --help!" && exit 1)
+          
+          echo "=== Verifying -add-fd and /dev/fdset Strings in Packaged Android QEMU Binary ==="
+          PACKAGED_QEMU="app/src/main/jniLibs/arm64-v8a/libqemu_system_aarch64.so"
+          if [[ -f "$PACKAGED_QEMU" ]]; then
+            strings "$PACKAGED_QEMU" | grep "add-fd" | head -n 5 || (echo "FATAL: 'add-fd' string missing from packaged QEMU binary!" && exit 1)
+            strings "$PACKAGED_QEMU" | grep "/dev/fdset" | head -n 5 || (echo "FATAL: '/dev/fdset' string missing from packaged QEMU binary!" && exit 1)
+            echo "✓ Verified: Packaged libqemu_system_aarch64.so contains genuine -add-fd and /dev/fdset support!"
+          else
+            echo "FATAL: Packaged QEMU binary not found at $PACKAGED_QEMU!" && exit 1
+          fi
+
       - name: Kernel Boot Sanity Check via Host-Native QEMU
         run: |
           echo "=== Running Kernel Boot Sanity Check via Host-Native QEMU Runner ==="

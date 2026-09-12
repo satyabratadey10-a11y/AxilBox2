@@ -178,12 +178,12 @@ class QemuProcessRunner(
     }
 
     private fun extractProcFds(args: List<String>): List<Int> {
-        val regex = """/proc/self/fd/(\d+)""".toRegex()
+        val procRegex = """/proc/self/fd/(\d+)""".toRegex()
+        val addFdRegex = """(?:^|,|\s)fd=(\d+)""".toRegex()
         return args.flatMap { arg ->
-            regex.findAll(arg).mapNotNull { match ->
-                match.groupValues[1].toIntOrNull()
-            }
-        }
+            procRegex.findAll(arg).mapNotNull { it.groupValues[1].toIntOrNull() } +
+            addFdRegex.findAll(arg).mapNotNull { it.groupValues[1].toIntOrNull() }
+        }.distinct()
     }
 
     private fun getProcessPid(process: Process): Long {

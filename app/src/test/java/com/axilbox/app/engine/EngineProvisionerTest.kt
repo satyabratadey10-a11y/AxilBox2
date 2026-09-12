@@ -134,7 +134,7 @@ class EngineProvisionerTest {
     }
 
     @Test
-    fun buildQemuArgs_usesSafProcFdWhenBootResourcesPassed() {
+    fun buildQemuArgs_usesAddFdAndDevFdsetForSafBootResources() {
         val instance = VirtualInstance(
             id = 4L,
             name = "SafInstance",
@@ -152,12 +152,49 @@ class EngineProvisionerTest {
 
         val args = provisioner.buildQemuArgs(instance, bootResources = fakeBootResources)
 
-        // Verifies direct /proc/self/fd passthrough is passed into QEMU -drive and -initrd
-        val dIndex = args.indexOf("-drive")
-        assertEquals("file=/proc/self/fd/42,if=virtio,format=raw", args[dIndex + 1])
+        // Verifies -add-fd and /dev/fdset are emitted instead of /proc/self/fd
+        assertTrue(args.contains("-add-fd"))
+        val addFdIndices = args.mapIndexedNotNull { index, elem -> if (elem == "-add-fd") index else null }
+        assertEquals(2, addFdIndices.size)
 
+        // Initrd is processed first (set=0)
+        assertEquals("fd=43,set=0", args[addFdIndices[0] + 1])
         val iIndex = args.indexOf("-initrd")
-        assertEquals("/proc/self/fd/43", args[iIndex + 1])
+        assertEquals("/dev/fdset/0", args[iIndex + 1])
+
+        // Disk image is processed next (set=1)
+        assertEquals("fd=42,set=1", args[addFdIndices[1] + 1])
+        val dIndex = args.indexOf("-drive")
+        assertEquals("file=/dev/fdset/1,if=virtio,format=raw", args[dIndex + 1])
+
+        // Direct /proc/self/fd must NOT appear in QEMU file arguments
+        assertFalse(args.any { it.contains("file=/proc/self/fd") })
+    }
+
+    @Test
+    fun buildQemuArgs_withSingleSafDisk_emitsSet0() {
+        val instance = VirtualInstance(
+            id = 5L,
+            name = "SingleDiskInstance",
+            osType = OsType.LINUX_GENERIC,
+            ramMb = 2048,
+            vCpuCount = 2,
+            imageUri = "content://saf/alpine.img"
+        )
+        val fakeResources = InstanceBootResources(
+            diskResource = ResolvedBootResource(path = "/proc/self/fd/102", isDirectFd = true),
+            kernelResource = null,
+            initrdResource = null
+        )
+        val args = provisioner.buildQemuArgs(instance, bootResources = fakeResources)
+
+        val addFdIndex = args.indexOf("-add-fd")
+        assertTrue(addFdIndex >= 0)
+        assertEquals("fd=102,set=0", args[addFdIndex + 1])
+
+        val driveIndex = args.indexOf("-drive")
+        assertTrue(driveIndex >= 0)
+        assertEquals("file=/dev/fdset/0,if=virtio,format=raw", args[driveIndex + 1])
     }
 
     @Test

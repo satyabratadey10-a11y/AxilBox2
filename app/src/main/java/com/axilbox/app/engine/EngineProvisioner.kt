@@ -229,6 +229,8 @@ class EngineProvisioner(private val context: Context) {
         customKernelPath: String? = null,
         customInitrdPath: String? = null
     ): List<String> {
+        var nextFdSet = 0
+
         val kernelPath = customKernelPath
             ?: bootResources?.kernelResource?.path
             ?: instance.kernelUri
@@ -243,26 +245,48 @@ class EngineProvisioner(private val context: Context) {
             "-m", "${instance.ramMb}M"
         )
 
+        // 1. Kernel image argument (with -add-fd if SAF-backed)
         if (!kernelPath.isNullOrBlank()) {
-            args.addAll(listOf("-kernel", kernelPath))
+            val kernelFd = extractFd(bootResources?.kernelResource, kernelPath)
+            if (kernelFd != null) {
+                val set = nextFdSet++
+                args.addAll(listOf("-add-fd", "fd=$kernelFd,set=$set"))
+                args.addAll(listOf("-kernel", "/dev/fdset/$set"))
+            } else {
+                args.addAll(listOf("-kernel", kernelPath))
+            }
         }
 
-        // Initrd: ONLY from custom path, resolved boot resource, or instance.initrdUri.
-        // No baked-in fallback initrd.
+        // 2. Initrd argument (with -add-fd if SAF-backed)
+        // ONLY from custom path, resolved boot resource, or instance.initrdUri.
         val resolvedInitrd = customInitrdPath
             ?: bootResources?.initrdResource?.path
             ?: instance.initrdUri
 
         if (!resolvedInitrd.isNullOrBlank()) {
-            args.addAll(listOf("-initrd", resolvedInitrd))
+            val initrdFd = extractFd(bootResources?.initrdResource, resolvedInitrd)
+            if (initrdFd != null) {
+                val set = nextFdSet++
+                args.addAll(listOf("-add-fd", "fd=$initrdFd,set=$set"))
+                args.addAll(listOf("-initrd", "/dev/fdset/$set"))
+            } else {
+                args.addAll(listOf("-initrd", resolvedInitrd))
+            }
         }
 
-        // Disk image if supplied
+        // 3. Disk image argument (with -add-fd if SAF-backed)
         val resolvedDisk = bootResources?.diskResource?.path ?: instance.imageUri
         if (!resolvedDisk.isNullOrBlank()) {
-            args.addAll(listOf(
-                "-drive", "file=$resolvedDisk,if=virtio,format=raw"
-            ))
+            val diskFd = extractFd(bootResources?.diskResource, resolvedDisk)
+            if (diskFd != null) {
+                val set = nextFdSet++
+                args.addAll(listOf("-add-fd", "fd=$diskFd,set=$set"))
+                args.addAll(listOf("-drive", "file=/dev/fdset/$set,if=virtio,format=raw"))
+            } else {
+                args.addAll(listOf(
+                    "-drive", "file=$resolvedDisk,if=virtio,format=raw"
+                ))
+            }
         }
 
         // Serial and kernel cmdline with deduplicated arguments
@@ -277,5 +301,17 @@ class EngineProvisioner(private val context: Context) {
         ))
 
         return args
+    }
+
+    private fun extractFd(resource: ResolvedBootResource?, pathOrUri: String?): Int? {
+        if (resource?.isDirectFd == true) {
+            val pfdVal = resource.pfd?.fd
+            if (pfdVal != null && pfdVal >= 0) return pfdVal
+        }
+        val p = resource?.path ?: pathOrUri ?: return null
+        if (p.startsWith("/proc/self/fd/")) {
+            return p.removePrefix("/proc/self/fd/").substringBefore("/").toIntOrNull()
+        }
+        return null
     }
 }

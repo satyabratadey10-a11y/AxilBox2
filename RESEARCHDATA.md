@@ -419,4 +419,43 @@ To guarantee that user-selected SAF file descriptors survive intact into the QEM
 - **SAF Passthrough Launches:** When any argument contains `/proc/self/fd/<N>` or `preservedFds` is non-empty, `QemuProcessRunner` routes execution through `NativeEngineBridge.forkAndExecQemu()`.
 - **Plain File Launches / JVM Fallback:** When no file descriptors are passed (e.g., standard internal storage boot files or headless unit test environments where the native `.so` is not loaded), `QemuProcessRunner` uses the standard `ProcessBuilder` path.
 
+### 6.10. The Android SELinux /proc/self/fd Reopen Barrier and QEMU -add-fd /dev/fdset Architecture
+
+#### 1. The Distinction Between Inherited Open Descriptors and Reopenable Paths
+When Android's Storage Access Framework (SAF) opens a document via `ContentResolver.openFileDescriptor(uri, "rw")`:
+- The Android OS (running as a privileged system service in `MediaProvider` / `vold`) opens the underlying storage node on the FUSE/sdcardfs filesystem and returns an active kernel file descriptor (`int rawFd`).
+- The calling application process holds a valid descriptor pointing directly to the open kernel `struct file*`. The process has full POSIX `read()`, `write()`, `pread64()`, `pwrite64()`, `fstat()`, and `lseek64()` permissions on this descriptor.
+- Native `fork()` + `execve()` successfully inherits this open descriptor into the child process with `FD_CLOEXEC` cleared. The diagnostic confirms `readlink("/proc/self/fd/<N>")` successfully resolves the underlying path.
+
+#### 2. The SELinux `Permission Denied` Failure Mode on `/proc/self/fd/<N>`
+When QEMU's block driver is passed `-drive file=/proc/self/fd/102,if=virtio,format=raw`:
+- QEMU treats `/proc/self/fd/102` as a normal filesystem path and invokes the standard POSIX `open(path, O_RDWR)` system call.
+- In Linux, opening `/proc/self/fd/<N>` is not a simple duplicate of the descriptor; the VFS follows the magic symlink to the target inode and subjects the operation to standard filesystem permission and security hook checks (`security_file_open`).
+- Under Android's SELinux policy, untrusted app processes (`u:r:untrusted_app:s0` or `u:r:untrusted_app_all:s0`) are strictly forbidden from performing direct POSIX `open()` operations against files on shared external storage labeled `media_rw_data_file`, `sdcardfs`, or `fuseblk`:
+  ```
+  type=1400 audit: avc: denied { open } for path="/storage/emulated/0/Download/disk.img" dev="fuse" ino=... scontext=u:r:untrusted_app:s0:c... tcontext=u:object_r:media_rw_data_file:s0 tclass=file permissive=0
+  ```
+- The kernel returns `EACCES (Permission denied)`. Even though the process holds an already-open descriptor to the exact same file, the path-based `open()` is blocked by SELinux.
+
+#### 3. The QEMU `-add-fd` and `/dev/fdset/<set>` Solution
+QEMU provides a built-in file-descriptor passing subsystem (`monitor_fdset_add_fd` and `qemu_open_internal`) specifically architected to consume pre-opened file descriptors without invoking `open()`:
+
+1. **Option Registration (`-add-fd`):**
+   ```bash
+   -add-fd fd=102,set=0
+   ```
+   QEMU parses the `-add-fd` command-line argument during option initialization and registers the inherited, already-open descriptor (`fd=102`) into its internal monitor file descriptor set table (`mon_fdsets`) under set index `0`. No `open()` call occurs.
+2. **Virtual Device Path (`/dev/fdset/<set>`):**
+   ```bash
+   -drive file=/dev/fdset/0,if=virtio,format=raw
+   ```
+   QEMU's block driver attempts to open `/dev/fdset/0`. Inside `util/osdep.c` (`qemu_open_internal`), QEMU detects the `/dev/fdset/` prefix and intercepts the call before it reaches the Linux kernel VFS.
+3. **Descriptor Duplication via `fcntl(F_DUPFD_CLOEXEC)`:**
+   Instead of calling `open("/dev/fdset/0", ...)`, QEMU queries `monitor_fdset_get_fd(set=0, flags)` and duplicates the registered descriptor using `fcntl(fd, F_DUPFD_CLOEXEC)` or `dup()`.
+4. **Bypassing the SELinux Barrier:**
+   Because `dup()` / `F_DUPFD_CLOEXEC` acts directly upon an existing open kernel `struct file*` handle without performing path lookup, inode resolution, or triggering the `security_file_open` SELinux hook, the operation succeeds completely on Android.
+5. **Multiple SAF Resource Sets:**
+   Set numbers are incremented for each SAF-backed resource (`set=0` for disk image, `set=1` for guest kernel, `set=2` for initrd), providing isolated, zero-copy descriptor mapping across all virtual hardware interfaces.
+
+
 
