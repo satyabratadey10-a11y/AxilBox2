@@ -457,5 +457,28 @@ QEMU provides a built-in file-descriptor passing subsystem (`monitor_fdset_add_f
 5. **Multiple SAF Resource Sets:**
    Set numbers are incremented for each SAF-backed resource (`set=0` for disk image, `set=1` for guest kernel, `set=2` for initrd), providing isolated, zero-copy descriptor mapping across all virtual hardware interfaces.
 
+### 6.11. QEMU FD-Set Access Mode Matching and Initramfs vs Disk-Backed Boot Architecture
 
+#### 1. The Access Mode Flag-Matching Requirement (`O_RDONLY` vs `O_RDWR`)
+When QEMU block drivers consume descriptors registered via `-add-fd fd=<N>,set=<S>`, `monitor_fdset_get_fd()` in `qemu/util/osdep.c` verifies that the open flags requested by the block device match or are compatible with the access mode flags of the registered descriptor:
+- When a document is opened via SAF with mode `"r"` (or if `"rw"` was requested but denied by the document provider, falling back to `"r"`), the underlying descriptor has access mode `O_RDONLY` (`0x0`).
+- By default, QEMU's `-drive` option assumes a writable disk and requests `O_RDWR` (`0x2`).
+- When `monitor_fdset_get_fd` checks the set, it discovers that no descriptor in set `<S>` satisfies `O_RDWR`. QEMU aborts with:
+  ```
+  qemu-system-aarch64: -drive file=/dev/fdset/0,if=virtio,format=raw: Flags mismatch in fd set 0: requested 0x2, found 0x0
+  ```
+- **The Correct Resolution:** Any `-drive` backed by a SAF-opened descriptor opened in `"r"` mode must include `,readonly=on` (`-drive file=/dev/fdset/<set>,if=virtio,format=raw,readonly=on`). This forces QEMU's block driver to request `O_RDONLY`, matching the registered descriptor. `UriUtils.kt` tracks `isReadOnly` on `ResolvedBootResource` and `EngineProvisioner.kt` automatically appends `,readonly=on`.
 
+#### 2. Rootfs Distinction: Initramfs (RAM-backed) vs Disk Image (Block-backed)
+A rootfs archive (`alpine-minirootfs-*.tar.gz`) is a compressed directory tree of userspace binaries and configuration files, NOT a block disk image:
+- **Block Disk Image:** Contains partition tables (MBR/GPT) and a filesystem structure (ext4, FAT32, btrfs). The kernel mounts it via a block device driver (e.g. `root=/dev/vda`).
+- **Initial Ramdisk (Initramfs):** A `cpio` archive in SVR4 portable format (`newc`), optionally gzip-compressed. The kernel bootloader unpacks it directly into RAM (rootfs / tmpfs) during early boot, and the kernel executes PID 1 at `rdinit=/sbin/init` or `/init`.
+- **Why a tar.gz cannot boot as -drive or -initrd directly:**
+  1. A `.tar.gz` attached to `-drive` is exposed as an unpartitioned, unformatted raw block device. The kernel's VFS cannot mount a tar archive as a block filesystem, resulting in `VFS: Unable to mount root fs on unknown-block(254,0)`.
+  2. The kernel's built-in initramfs unpacker (`init/initramfs.c`) strictly expects a `cpio` archive formatted with the magic header `"070701"` or `"070702"` (`newc` format). Passing a `.tar.gz` to `-initrd` causes the kernel's unpacker to fail with `Initramfs unpacking failed: invalid magic at start of compressed archive`.
+- **AxilBox2 Boot Configuration:**
+  - Minirootfs must be repacked into `newc` format `.cpio.gz` via `tools/rootfs/convert-tar-to-cpio.sh`.
+  - In AxilBox2 Instance Configuration, the converted `.cpio.gz` is selected in **Initial Ramdisk** (`initrdUri`).
+  - **Disk Image** (`imageUri`) is left **EMPTY**.
+  - **Custom Kernel** (`kernelUri`) is left **EMPTY** (AxilBox2 automatically uses the bundled virt kernel `Image`).
+  - `EngineProvisioner.kt` injects `rdinit=/sbin/init console=ttyAMA0 earlycon=pl011,0x09000000 panic=-1` on the kernel command line, launching Alpine Linux directly from RAM into the interactive serial console.

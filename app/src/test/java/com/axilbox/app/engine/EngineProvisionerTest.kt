@@ -198,6 +198,32 @@ class EngineProvisionerTest {
     }
 
     @Test
+    fun buildQemuArgs_withReadOnlySafDisk_emitsReadOnlyDrive() {
+        val instance = VirtualInstance(
+            id = 6L,
+            name = "ReadOnlyDiskInstance",
+            osType = OsType.LINUX_GENERIC,
+            ramMb = 2048,
+            vCpuCount = 2,
+            imageUri = "content://saf/alpine.img"
+        )
+        val fakeResources = InstanceBootResources(
+            diskResource = ResolvedBootResource(path = "/proc/self/fd/102", isDirectFd = true, isReadOnly = true),
+            kernelResource = null,
+            initrdResource = null
+        )
+        val args = provisioner.buildQemuArgs(instance, bootResources = fakeResources)
+
+        val addFdIndex = args.indexOf("-add-fd")
+        assertTrue(addFdIndex >= 0)
+        assertEquals("fd=102,set=0", args[addFdIndex + 1])
+
+        val driveIndex = args.indexOf("-drive")
+        assertTrue(driveIndex >= 0)
+        assertEquals("file=/dev/fdset/0,if=virtio,format=raw,readonly=on", args[driveIndex + 1])
+    }
+
+    @Test
     fun instanceBootResources_getActiveFds_extractsOnlyDirectFds() {
         val fakePfd42: android.os.ParcelFileDescriptor = io.mockk.mockk(relaxed = true)
         io.mockk.every { fakePfd42.fd } returns 42

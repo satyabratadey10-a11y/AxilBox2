@@ -278,13 +278,15 @@ class EngineProvisioner(private val context: Context) {
         val resolvedDisk = bootResources?.diskResource?.path ?: instance.imageUri
         if (!resolvedDisk.isNullOrBlank()) {
             val diskFd = extractFd(bootResources?.diskResource, resolvedDisk)
+            val isReadOnly = bootResources?.diskResource?.isReadOnly == true
+            val readonlySuffix = if (isReadOnly) ",readonly=on" else ""
             if (diskFd != null) {
                 val set = nextFdSet++
                 args.addAll(listOf("-add-fd", "fd=$diskFd,set=$set"))
-                args.addAll(listOf("-drive", "file=/dev/fdset/$set,if=virtio,format=raw"))
+                args.addAll(listOf("-drive", "file=/dev/fdset/$set,if=virtio,format=raw$readonlySuffix"))
             } else {
                 args.addAll(listOf(
-                    "-drive", "file=$resolvedDisk,if=virtio,format=raw"
+                    "-drive", "file=$resolvedDisk,if=virtio,format=raw$readonlySuffix"
                 ))
             }
         }

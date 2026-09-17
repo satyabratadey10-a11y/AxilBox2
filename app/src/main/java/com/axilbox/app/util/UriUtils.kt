@@ -16,7 +16,8 @@ data class ResolvedBootResource(
     val path: String,
     val pfd: ParcelFileDescriptor? = null,
     val isDirectFd: Boolean = false,
-    val isFallbackCopy: Boolean = false
+    val isFallbackCopy: Boolean = false,
+    val isReadOnly: Boolean = false
 ) : AutoCloseable {
     override fun close() {
         try {
@@ -54,7 +55,8 @@ object UriUtils {
                     path = file.absolutePath,
                     pfd = null,
                     isDirectFd = false,
-                    isFallbackCopy = false
+                    isFallbackCopy = false,
+                    isReadOnly = !file.canWrite() || !writable
                 )
             }
         }
@@ -77,20 +79,35 @@ object UriUtils {
             try {
                 val mode = if (writable) "rw" else "r"
                 var pfd: ParcelFileDescriptor? = null
+                var actuallyWritable = writable
                 try {
                     pfd = context.contentResolver.openFileDescriptor(uri, mode)
                 } catch (e: Exception) {
                     if (writable) {
                         Log.w(TAG, "[SAF Passthrough] 'rw' mode denied for $uri (${e.message}), trying read-only 'r' mode")
                         pfd = context.contentResolver.openFileDescriptor(uri, "r")
+                        actuallyWritable = false
                     } else {
                         throw e
                     }
                 }
 
+                var isReadOnly = !actuallyWritable
+
                 if (pfd != null) {
                     val rawFd = pfd.fd
                     if (rawFd >= 0) {
+                        // Check actual kernel open flags via fcntl F_GETFL if available
+                        try {
+                            val flags = android.system.Os.fcntlInt(pfd.fileDescriptor, android.system.OsConstants.F_GETFL, 0)
+                            val accMode = flags and android.system.OsConstants.O_ACCMODE
+                            if (accMode == android.system.OsConstants.O_RDONLY) {
+                                isReadOnly = true
+                            }
+                        } catch (_: Throwable) {
+                            // Ignored in unit tests or unsupported environments
+                        }
+
                         // Clear FD_CLOEXEC so that child processes (QEMU binary) inherit the descriptor across fork/exec
                         try {
                             android.system.Os.fcntlInt(pfd.fileDescriptor, android.system.OsConstants.F_SETFD, 0)
@@ -99,12 +116,13 @@ object UriUtils {
                         }
 
                         val procFdPath = "/proc/self/fd/$rawFd"
-                        Log.i(TAG, "[SAF Passthrough] Successfully opened $uri as $procFdPath (fd=$rawFd, writable=$writable)")
+                        Log.i(TAG, "[SAF Passthrough] Successfully opened $uri as $procFdPath (fd=$rawFd, writable=${!isReadOnly})")
                         return ResolvedBootResource(
                             path = procFdPath,
                             pfd = pfd,
                             isDirectFd = true,
-                            isFallbackCopy = false
+                            isFallbackCopy = false,
+                            isReadOnly = isReadOnly
                         )
                     } else {
                         pfd.close()
@@ -122,7 +140,8 @@ object UriUtils {
                     path = fallbackFile.absolutePath,
                     pfd = null,
                     isDirectFd = false,
-                    isFallbackCopy = true
+                    isFallbackCopy = true,
+                    isReadOnly = !fallbackFile.canWrite() || !writable
                 )
             }
         }

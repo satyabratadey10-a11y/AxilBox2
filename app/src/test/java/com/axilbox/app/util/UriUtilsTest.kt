@@ -94,6 +94,22 @@ class UriUtilsTest {
     }
 
     @Test
+    fun resolveBootResource_whenSafPfdRequestedWritableDenied_fallsBackToReadOnly_marksIsReadOnlyTrue() {
+        val uriStr = "content://com.android.providers.media.documents/document/102"
+        val mockPfd: ParcelFileDescriptor = mockk(relaxed = true)
+        every { mockPfd.fd } returns 34
+        every { contentResolver.openFileDescriptor(any(), "rw") } throws SecurityException("Write access denied")
+        every { contentResolver.openFileDescriptor(any(), "r") } returns mockPfd
+
+        val res = UriUtils.resolveBootResource(context, uriStr, writable = true)
+        assertNotNull(res)
+        assertEquals("/proc/self/fd/34", res?.path)
+        assertTrue(res?.isDirectFd ?: false)
+        assertTrue(res?.isReadOnly ?: false)
+        res?.close()
+    }
+
+    @Test
     fun resolveBootResource_whenSafFails_fallsBackToCopyUriToCache() {
         val uriStr = "content://com.example.provider/image.iso"
         every { contentResolver.openFileDescriptor(any(), any()) } throws SecurityException("Permission denied")
