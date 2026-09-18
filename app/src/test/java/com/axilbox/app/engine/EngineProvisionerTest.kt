@@ -239,4 +239,162 @@ class EngineProvisionerTest {
         val activeFds = resources.getActiveFds()
         assertEquals(listOf(42, 43), activeFds)
     }
+
+    @Test
+    fun buildQemuArgs_allSafResources_strictlySatisfyFdSetInvariants() {
+        val instance = VirtualInstance(
+            id = 7L,
+            name = "AllSafInstance",
+            osType = OsType.DEBIAN_ARM64,
+            ramMb = 2048,
+            vCpuCount = 2,
+            kernelUri = "content://saf/custom_kernel",
+            initrdUri = "content://saf/alpine.cpio.gz",
+            imageUri = "content://saf/rootfs.img"
+        )
+        val allSafResources = InstanceBootResources(
+            kernelResource = ResolvedBootResource(path = "/proc/self/fd/101", isDirectFd = true),
+            initrdResource = ResolvedBootResource(path = "/proc/self/fd/102", isDirectFd = true),
+            diskResource = ResolvedBootResource(path = "/proc/self/fd/103", isDirectFd = true, isReadOnly = true)
+        )
+        val args = provisioner.buildQemuArgs(instance, bootResources = allSafResources)
+
+        // Verify invariant helper with all boot resources
+        assertFdSetInvariants(args, allSafResources)
+
+        // Verify distinct sets: kernel=0, initrd=1, disk=2
+        val kIndex = args.indexOf("-kernel")
+        assertEquals("/dev/fdset/0", args[kIndex + 1])
+        val iIndex = args.indexOf("-initrd")
+        assertEquals("/dev/fdset/1", args[iIndex + 1])
+        val dIndex = args.indexOf("-drive")
+        assertEquals("file=/dev/fdset/2,if=virtio,format=raw,readonly=on", args[dIndex + 1])
+    }
+
+    @Test
+    fun buildQemuArgs_singleSafInitrdWithBundledKernel_strictlySatisfiesFdSetInvariants() {
+        val instance = VirtualInstance(
+            id = 8L,
+            name = "AlpineInitrdInstance",
+            osType = OsType.LINUX_GENERIC,
+            ramMb = 1024,
+            vCpuCount = 1,
+            initrdUri = "content://saf/alpine-minirootfs.cpio.gz"
+        )
+        val mockPfd125: android.os.ParcelFileDescriptor = io.mockk.mockk(relaxed = true)
+        io.mockk.every { mockPfd125.fd } returns 125
+
+        val initrdOnlyResource = InstanceBootResources(
+            kernelResource = null, // uses bundled kernel
+            initrdResource = ResolvedBootResource(path = "/proc/self/fd/125", pfd = mockPfd125, isDirectFd = true, isReadOnly = true),
+            diskResource = null
+        )
+        val args = provisioner.buildQemuArgs(instance, bootResources = initrdOnlyResource)
+
+        // Verify invariant helper with boot resources
+        assertFdSetInvariants(args, initrdOnlyResource)
+
+        // Kernel must be bundled local path (no /dev/fdset)
+        val kIndex = args.indexOf("-kernel")
+        assertFalse(args[kIndex + 1].contains("/dev/fdset"))
+
+        // Initrd must be set=0
+        val iIndex = args.indexOf("-initrd")
+        assertEquals("/dev/fdset/0", args[iIndex + 1])
+
+        val addFdIndex = args.indexOf("-add-fd")
+        assertTrue("Expected -add-fd in args", addFdIndex >= 0)
+        assertEquals("fd=125,set=0", args[addFdIndex + 1])
+        assertTrue("Expected -add-fd to precede -initrd", addFdIndex < iIndex)
+    }
+
+    @Test(expected = AssertionError::class)
+    fun assertFdSetInvariants_failsWhenAddFdMissingForDevFdset() {
+        val badArgs = listOf(
+            "/data/app/qemu",
+            "-initrd", "/dev/fdset/0"
+        )
+        assertFdSetInvariants(badArgs)
+    }
+
+    @Test(expected = AssertionError::class)
+    fun assertFdSetInvariants_failsWhenSetNumbersDiverge() {
+        val badArgs = listOf(
+            "/data/app/qemu",
+            "-add-fd", "fd=125,set=0",
+            "-initrd", "/dev/fdset/1"
+        )
+        assertFdSetInvariants(badArgs)
+    }
+
+    @Test(expected = AssertionError::class)
+    fun assertFdSetInvariants_failsWhenInheritedFdNotRegistered() {
+        val mockPfd125: android.os.ParcelFileDescriptor = io.mockk.mockk(relaxed = true)
+        io.mockk.every { mockPfd125.fd } returns 125
+        val resources = InstanceBootResources(
+            initrdResource = ResolvedBootResource(path = "/proc/self/fd/125", pfd = mockPfd125, isDirectFd = true)
+        )
+        // Args without -add-fd for 125
+        val badArgs = listOf(
+            "/data/app/qemu",
+            "-initrd", "/data/app/initrd.img"
+        )
+        assertFdSetInvariants(badArgs, resources)
+    }
+
+    private fun assertFdSetInvariants(args: List<String>, bootResources: InstanceBootResources? = null) {
+        val devFdsetRegex = """/dev/fdset/(\d+)""".toRegex()
+        val addFdRegex = """fd=(\d+),set=(\d+)""".toRegex()
+
+        // 1. Collect all -add-fd specifications and their index in argv
+        val registeredFdSets = mutableMapOf<Int, Int>() // setIndex -> argIndex
+        val registeredFds = mutableSetOf<Int>()
+        for (i in 0 until args.size - 1) {
+            if (args[i] == "-add-fd") {
+                val match = addFdRegex.matchEntire(args[i + 1])
+                assertNotNull("-add-fd argument must match 'fd=<M>,set=<N>', got: '${args[i + 1]}'", match)
+                val rawFd = match!!.groupValues[1].toInt()
+                val setNum = match.groupValues[2].toInt()
+                registeredFdSets[setNum] = i
+                registeredFds.add(rawFd)
+            }
+        }
+
+        // 2. Check that every inherited FD from bootResources is registered via -add-fd
+        if (bootResources != null) {
+            val activeFds = bootResources.getActiveFds()
+            for (fd in activeFds) {
+                assertTrue(
+                    "Inherited active fd $fd from bootResources was not registered via -add-fd in argv: $args",
+                    registeredFds.contains(fd)
+                )
+            }
+        }
+
+        // 3. Check every -kernel, -initrd, -drive references a valid preceding -add-fd
+        val referencedSets = mutableSetOf<Int>()
+        for (i in 0 until args.size - 1) {
+            val opt = args[i]
+            if (opt in listOf("-kernel", "-initrd", "-drive")) {
+                val value = args[i + 1]
+                val match = devFdsetRegex.find(value)
+                if (match != null) {
+                    val setNum = match.groupValues[1].toInt()
+                    assertTrue(
+                        "Argument '$opt $value' at index $i references /dev/fdset/$setNum, but no -add-fd ... set=$setNum was found earlier in argv",
+                        registeredFdSets.containsKey(setNum) && registeredFdSets[setNum]!! < i
+                    )
+                    referencedSets.add(setNum)
+                }
+            }
+        }
+
+        // 4. Check that there are no orphaned registered sets with diverging set numbers
+        for (setNum in registeredFdSets.keys) {
+            assertTrue(
+                "Registered set=$setNum via -add-fd was never referenced by -kernel, -initrd, or -drive",
+                referencedSets.contains(setNum)
+            )
+        }
+    }
 }

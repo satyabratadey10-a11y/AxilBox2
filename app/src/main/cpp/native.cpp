@@ -290,6 +290,16 @@ Java_com_axilbox_app_engine_NativeEngineBridge_nativeForkAndExecQemu(
     fflush(stdout);
     fflush(stderr);
 
+    // Diagnostic: Print full argv joined with spaces before execve()
+    std::string fullArgv = "";
+    for (size_t i = 0; i < argvStrings.size(); ++i) {
+        if (i > 0) fullArgv += " ";
+        fullArgv += argvStrings[i];
+    }
+    fprintf(stderr, "[AxilBox Native Child] EXEC ARGV: %s\n", fullArgv.c_str());
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "EXEC ARGV: %s", fullArgv.c_str());
+    fflush(stderr);
+
     // Execute QEMU binary directly
     execve(binPath.c_str(), c_argv.data(), c_envp.data());
 
