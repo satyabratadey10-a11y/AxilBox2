@@ -611,6 +611,17 @@ jobs:
             -nographic \
             -monitor stdio \
             -S \
+            -display none || true
+          exec 3<&-
+
+          echo "=== Live QMP 'query-fdsets' Probe on Host QEMU Runner ==="
+          exec 3< /dev/null
+          printf '{"execute": "qmp_capabilities"}\n{"execute": "query-fdsets"}\n{"execute": "quit"}\n' | qemu-system-aarch64 \
+            -M none \
+            -add-fd fd=3,set=0 \
+            -nographic \
+            -qmp stdio \
+            -S \
             -display none
           exec 3<&-
 

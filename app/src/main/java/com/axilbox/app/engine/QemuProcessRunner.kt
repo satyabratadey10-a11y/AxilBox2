@@ -330,13 +330,80 @@ class QemuProcessRunner(
         }
 
         val exitCode = NativeEngineBridge.waitForProcess(probeSpawn.pid)
-        emit("[AxilBox Diagnostic] QEMU probe process exited with code $exitCode")
+        emit("[AxilBox Diagnostic] QEMU HMP probe process exited with code $exitCode")
 
         testPfd.close()
         testFile.delete()
 
+        // ---------------------------------------------------------------------
+        // TEST 3: Run QEMU with -add-fd and query fdsets via QMP (JSON)
+        // ---------------------------------------------------------------------
+        emit("[AxilBox Diagnostic] ------------------------------------------------------------")
+        emit("[AxilBox Diagnostic] [Test 3/3] Running QMP 'query-fdsets' probe...")
+
+        val qmpTestFile = File(tmpDir, "probe_qmp_fd.tmp").apply { writeText("axilbox_qmp") }
+        val qmpTestPfd = try {
+            android.os.ParcelFileDescriptor.open(qmpTestFile, android.os.ParcelFileDescriptor.MODE_READ_ONLY)
+        } catch (_: Exception) { null }
+
+        if (qmpTestPfd != null) {
+            val qmpFd = qmpTestPfd.fd
+            try {
+                android.system.Os.fcntlInt(qmpTestPfd.fileDescriptor, android.system.OsConstants.F_SETFD, 0)
+            } catch (_: Exception) {}
+
+            val qmpArgs = mutableListOf(
+                provisioner.qemuBinary.absolutePath,
+                "-M", "none",
+                "-add-fd", "fd=$qmpFd,set=0",
+                "-nographic",
+                "-qmp", "stdio",
+                "-S",
+                "-display", "none"
+            )
+            emit("[AxilBox Diagnostic] Launching QMP: ${qmpArgs.joinToString(" ")}")
+            val qmpSpawn = NativeEngineBridge.forkAndExecQemu(
+                qemuPath = provisioner.qemuBinary.absolutePath,
+                argv = qmpArgs,
+                envp = envp,
+                workingDir = workingDir.absolutePath,
+                preservedFds = intArrayOf(qmpFd)
+            )
+
+            if (qmpSpawn != null && qmpSpawn.pid > 0) {
+                if (qmpSpawn.stdinFd >= 0) {
+                    try {
+                        val stdinPfd = android.os.ParcelFileDescriptor.adoptFd(qmpSpawn.stdinFd)
+                        val outStream = android.os.ParcelFileDescriptor.AutoCloseOutputStream(stdinPfd)
+                        outStream.write("{\"execute\": \"qmp_capabilities\"}\n{\"execute\": \"query-fdsets\"}\n{\"execute\": \"quit\"}\n".toByteArray(Charsets.UTF_8))
+                        outStream.flush()
+                        outStream.close()
+                    } catch (_: Exception) {}
+                }
+
+                val qmpOutPfd = try { android.os.ParcelFileDescriptor.adoptFd(qmpSpawn.stdoutFd) } catch (_: Throwable) { null }
+                if (qmpOutPfd != null) {
+                    val reader = BufferedReader(InputStreamReader(android.os.ParcelFileDescriptor.AutoCloseInputStream(qmpOutPfd)))
+                    try {
+                        var line: String? = reader.readLine()
+                        while (line != null) {
+                            emit("[QMP Output] $line")
+                            line = reader.readLine()
+                        }
+                    } catch (_: Exception) {
+                    } finally {
+                        reader.close()
+                    }
+                }
+                val qmpExitCode = NativeEngineBridge.waitForProcess(qmpSpawn.pid)
+                emit("[AxilBox Diagnostic] QEMU QMP probe process exited with code $qmpExitCode")
+            }
+            qmpTestPfd.close()
+            qmpTestFile.delete()
+        }
+
         emit("[AxilBox Diagnostic] ============================================================")
-        emit("[AxilBox Diagnostic] END OF QEMU -add-fd / HMP ISOLATION PROBE")
+        emit("[AxilBox Diagnostic] END OF QEMU -add-fd / HMP / QMP ISOLATION PROBE")
         emit("[AxilBox Diagnostic] ============================================================")
     }.flowOn(Dispatchers.IO)
 
