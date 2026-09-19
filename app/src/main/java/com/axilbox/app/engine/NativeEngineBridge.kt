@@ -77,7 +77,8 @@ object NativeEngineBridge {
 
     data class NativeSpawnResult(
         val pid: Int,
-        val stdoutFd: Int
+        val stdoutFd: Int,
+        val stdinFd: Int = -1
     )
 
     fun forkAndExecQemu(
@@ -97,7 +98,8 @@ object NativeEngineBridge {
                 preservedFds
             )
             if (res != null && res.size >= 2 && res[0] > 0) {
-                NativeSpawnResult(pid = res[0], stdoutFd = res[1])
+                val stdin = if (res.size >= 3) res[2] else -1
+                NativeSpawnResult(pid = res[0], stdoutFd = res[1], stdinFd = stdin)
             } else {
                 null
             }

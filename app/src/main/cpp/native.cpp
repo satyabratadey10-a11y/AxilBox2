@@ -190,7 +190,16 @@ Java_com_axilbox_app_engine_NativeEngineBridge_nativeForkAndExecQemu(
     // 7. Create stdout/stderr capture pipe with O_CLOEXEC
     int out_pipe[2];
     if (pipe2(out_pipe, O_CLOEXEC) != 0) {
-        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "pipe2() failed: %s (errno=%d)", strerror(errno), errno);
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "pipe2(out_pipe) failed: %s (errno=%d)", strerror(errno), errno);
+        return nullptr;
+    }
+
+    // Create stdin input pipe with O_CLOEXEC
+    int in_pipe[2];
+    if (pipe2(in_pipe, O_CLOEXEC) != 0) {
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "pipe2(in_pipe) failed: %s (errno=%d)", strerror(errno), errno);
+        close(out_pipe[0]);
+        close(out_pipe[1]);
         return nullptr;
     }
 
@@ -200,18 +209,22 @@ Java_com_axilbox_app_engine_NativeEngineBridge_nativeForkAndExecQemu(
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "fork() failed: %s (errno=%d)", strerror(errno), errno);
         close(out_pipe[0]);
         close(out_pipe[1]);
+        close(in_pipe[0]);
+        close(in_pipe[1]);
         return nullptr;
     }
 
     if (pid > 0) {
-        // Parent process: close write end, return child PID and read fd
+        // Parent process: close write end of out_pipe and read end of in_pipe
         close(out_pipe[1]);
-        __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Forked QEMU child PID %d (pipe read fd=%d)", pid, out_pipe[0]);
+        close(in_pipe[0]);
+        __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Forked QEMU child PID %d (pipe read fd=%d, write fd=%d)",
+                            pid, out_pipe[0], in_pipe[1]);
 
-        jintArray result = env->NewIntArray(2);
+        jintArray result = env->NewIntArray(3);
         if (result != nullptr) {
-            jint vals[2] = { static_cast<jint>(pid), static_cast<jint>(out_pipe[0]) };
-            env->SetIntArrayRegion(result, 0, 2, vals);
+            jint vals[3] = { static_cast<jint>(pid), static_cast<jint>(out_pipe[0]), static_cast<jint>(in_pipe[1]) };
+            env->SetIntArrayRegion(result, 0, 3, vals);
         }
         return result;
     }
@@ -220,8 +233,9 @@ Java_com_axilbox_app_engine_NativeEngineBridge_nativeForkAndExecQemu(
     // Child process (pid == 0) — strictly POSIX async-signal-safe calls only
     // =========================================================================
 
-    // Close parent's read end of pipe
+    // Close parent's ends
     close(out_pipe[0]);
+    close(in_pipe[1]);
 
     // Redirect stdout and stderr to out_pipe[1]
     dup2(out_pipe[1], STDOUT_FILENO);
@@ -230,13 +244,10 @@ Java_com_axilbox_app_engine_NativeEngineBridge_nativeForkAndExecQemu(
         close(out_pipe[1]);
     }
 
-    // Redirect stdin to /dev/null
-    int devnull = open("/dev/null", O_RDONLY);
-    if (devnull >= 0) {
-        dup2(devnull, STDIN_FILENO);
-        if (devnull != STDIN_FILENO) {
-            close(devnull);
-        }
+    // Redirect stdin to in_pipe[0]
+    dup2(in_pipe[0], STDIN_FILENO);
+    if (in_pipe[0] != STDIN_FILENO) {
+        close(in_pipe[0]);
     }
 
     // Diagnostic & Defensive verification of each preserved fd

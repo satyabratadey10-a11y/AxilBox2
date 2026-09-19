@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -241,6 +242,14 @@ fun BootScreen(
                         Icon(
                             imageVector = if (bootState.isLogPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
                             contentDescription = if (bootState.isLogPaused) "Resume Logs" else "Pause Logs",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    IconButton(onClick = { viewModel.runDiagnosticProbe() }) {
+                        Icon(
+                            imageVector = Icons.Filled.BugReport,
+                            contentDescription = "Run -add-fd / HMP Diagnostic Probe",
                             tint = Color.White,
                             modifier = Modifier.size(20.dp)
                         )

@@ -603,6 +603,16 @@ jobs:
           echo "=== Verifying QEMU -add-fd CLI Support on Host Runner ==="
           qemu-system-aarch64 --help | grep -A 2 -- "-add-fd" || (echo "FATAL: -add-fd option not found in host qemu-system-aarch64 --help!" && exit 1)
           
+          echo "=== Live HMP 'info fdsets' Probe on Host QEMU Runner ==="
+          exec 3< /dev/null
+          printf "info fdsets\nquit\n" | qemu-system-aarch64 \
+            -add-fd fd=3,set=0 \
+            -nographic \
+            -monitor stdio \
+            -S \
+            -display none
+          exec 3<&-
+
           echo "=== Verifying -add-fd and /dev/fdset Strings in Packaged Android QEMU Binary ==="
           PACKAGED_QEMU="app/src/main/jniLibs/arm64-v8a/libqemu_system_aarch64.so"
           if [[ -f "$PACKAGED_QEMU" ]]; then

@@ -6,6 +6,8 @@ build/
 app/build/
 *.apk
 *.aab
+jniLibs-bundle/
+assets-bundle/
 
 # Android Studio & IntelliJ
 .idea/

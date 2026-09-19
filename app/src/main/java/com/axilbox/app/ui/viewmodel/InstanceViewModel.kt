@@ -315,6 +315,41 @@ class InstanceViewModel(
                     )
                 }
 
+                // Automatically run diagnostic probe when an initrd or SAF resource is configured
+                if (!instance.initrdUri.isNullOrBlank() || bootResources.getActiveFds().isNotEmpty()) {
+                    try {
+                        qemuProcessRunner!!.runDiagnosticProbe().collect { rawLine ->
+                            val level = when {
+                                rawLine.contains("ERROR", ignoreCase = true) || rawLine.contains("⚠️") ->
+                                    BootLogSimulator.LogLevel.WARN
+                                rawLine.contains("✓") || rawLine.contains("fdset 0") ->
+                                    BootLogSimulator.LogLevel.SUCCESS
+                                else ->
+                                    BootLogSimulator.LogLevel.INFO
+                            }
+                            _bootUiState.update { current ->
+                                current.copy(
+                                    bootLogs = current.bootLogs + BootLogSimulator.LogEntry(
+                                        timestampSec = 0.0,
+                                        message = rawLine,
+                                        level = level
+                                    )
+                                )
+                            }
+                        }
+                    } catch (e: Exception) {
+                        _bootUiState.update { current ->
+                            current.copy(
+                                bootLogs = current.bootLogs + BootLogSimulator.LogEntry(
+                                    timestampSec = 0.0,
+                                    message = "[AxilBox Diagnostic] Auto-probe skipped: ${e.message}",
+                                    level = BootLogSimulator.LogLevel.WARN
+                                )
+                            )
+                        }
+                    }
+                }
+
                 val qemuArgs = engineProvisioner.buildQemuArgs(instance, bootResources)
                 _bootUiState.update { it.copy(bootStatus = InstanceStatus.RUNNING) }
                 repository.markBooted(instance.id)
@@ -443,6 +478,65 @@ class InstanceViewModel(
 
     fun clearLogs() {
         _bootUiState.update { it.copy(bootLogs = emptyList()) }
+    }
+
+    fun runDiagnosticProbe() {
+        viewModelScope.launch {
+            if (qemuProcessRunner == null) {
+                _bootUiState.update { current ->
+                    current.copy(
+                        bootLogs = current.bootLogs + BootLogSimulator.LogEntry(
+                            0.0,
+                            "[AxilBox Diagnostic] Cannot run probe: QemuProcessRunner is null",
+                            BootLogSimulator.LogLevel.ERROR
+                        )
+                    )
+                }
+                return@launch
+            }
+
+            _bootUiState.update { current ->
+                current.copy(
+                    bootLogs = current.bootLogs + BootLogSimulator.LogEntry(
+                        0.0,
+                        "[AxilBox Diagnostic] Triggering manual -add-fd / HMP probe...",
+                        BootLogSimulator.LogLevel.INFO
+                    )
+                )
+            }
+
+            try {
+                qemuProcessRunner.runDiagnosticProbe().collect { rawLine ->
+                    val level = when {
+                        rawLine.contains("ERROR", ignoreCase = true) || rawLine.contains("⚠️") ->
+                            BootLogSimulator.LogLevel.WARN
+                        rawLine.contains("✓") || rawLine.contains("fdset 0") ->
+                            BootLogSimulator.LogLevel.SUCCESS
+                        else ->
+                            BootLogSimulator.LogLevel.INFO
+                    }
+                    _bootUiState.update { current ->
+                        current.copy(
+                            bootLogs = current.bootLogs + BootLogSimulator.LogEntry(
+                                timestampSec = 0.0,
+                                message = rawLine,
+                                level = level
+                            )
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                _bootUiState.update { current ->
+                    current.copy(
+                        bootLogs = current.bootLogs + BootLogSimulator.LogEntry(
+                            0.0,
+                            "[AxilBox Diagnostic] Manual probe failed: ${e.message}",
+                            BootLogSimulator.LogLevel.ERROR
+                        )
+                    )
+                }
+            }
+        }
     }
 
     class Factory(
