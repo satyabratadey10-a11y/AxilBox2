@@ -606,6 +606,7 @@ jobs:
           echo "=== Live HMP 'info fdsets' Probe on Host QEMU Runner ==="
           exec 3< /dev/null
           printf "info fdsets\nquit\n" | qemu-system-aarch64 \
+            -M none \
             -add-fd fd=3,set=0 \
             -nographic \
             -monitor stdio \

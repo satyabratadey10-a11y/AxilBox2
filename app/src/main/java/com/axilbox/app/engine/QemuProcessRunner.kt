@@ -272,6 +272,7 @@ class QemuProcessRunner(
 
         val probeArgs = mutableListOf(
             provisioner.qemuBinary.absolutePath,
+            "-M", "none",
             "-add-fd", "fd=$testFd,set=0",
             "-nographic",
             "-monitor", "stdio",
