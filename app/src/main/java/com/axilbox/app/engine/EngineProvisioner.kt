@@ -103,9 +103,11 @@ class EngineProvisioner(private val context: Context) {
     }
 
     /**
-     * Resolves the instance's configured boot media (disk image, kernel, or initramfs)
-     * using SAF ParcelFileDescriptor passthrough (/proc/self/fd/<fd>) with explicit
-     * copyUriToCache fallback.
+     * Resolves the instance's configured boot media:
+     * - Disk images use SAF ParcelFileDescriptor direct passthrough (-add-fd / dev-fdset)
+     *   with copyUriToCache fallback.
+     * - Kernel and Initramfs images are resolved via copy-to-files-dir with SHA-256 caching,
+     *   passing plain filesystem paths directly to QEMU's ROM loader.
      */
     fun resolveInstanceBootResources(instance: VirtualInstance): InstanceBootResources {
         val logs = mutableListOf<String>()
@@ -126,32 +128,22 @@ class EngineProvisioner(private val context: Context) {
             res
         } else null
 
-        // 2. Resolve custom kernel image if configured
+        // 2. Resolve custom kernel image if configured (always via copy-to-files-dir with hash check)
         val kernelRes = if (!instance.kernelUri.isNullOrBlank()) {
-            val res = UriUtils.resolveBootResource(context, instance.kernelUri, writable = false)
+            val res = UriUtils.resolveBootResourceViaCopy(context, instance.kernelUri, prefix = "kernel")
             if (res != null) {
-                val desc = when {
-                    res.isDirectFd -> "SAF direct descriptor (${res.path})"
-                    res.isFallbackCopy -> "cache copy fallback (${res.path})"
-                    else -> "local file path (${res.path})"
-                }
-                logs.add("[Kernel] Custom kernel mapped via $desc")
+                logs.add("[Kernel] Custom kernel mapped via app-private storage (${res.path})")
             } else {
                 logs.add("[Kernel] Warning: Failed to resolve custom kernel URI '${instance.kernelUri}'")
             }
             res
         } else null
 
-        // 3. Resolve custom initramfs if configured
+        // 3. Resolve custom initramfs if configured (always via copy-to-files-dir with hash check)
         val initrdRes = if (!instance.initrdUri.isNullOrBlank()) {
-            val res = UriUtils.resolveBootResource(context, instance.initrdUri, writable = false)
+            val res = UriUtils.resolveBootResourceViaCopy(context, instance.initrdUri, prefix = "initrd")
             if (res != null) {
-                val desc = when {
-                    res.isDirectFd -> "SAF direct descriptor (${res.path})"
-                    res.isFallbackCopy -> "cache copy fallback (${res.path})"
-                    else -> "local file path (${res.path})"
-                }
-                logs.add("[Initrd] Custom initramfs mapped via $desc")
+                logs.add("[Initrd] Custom initramfs mapped via app-private storage (${res.path})")
             } else {
                 logs.add("[Initrd] Warning: Failed to resolve initrd URI '${instance.initrdUri}'")
             }
@@ -245,33 +237,19 @@ class EngineProvisioner(private val context: Context) {
             "-m", "${instance.ramMb}M"
         )
 
-        // 1. Kernel image argument (with -add-fd if SAF-backed)
+        // 1. Kernel image argument (always a direct file path to bundled or copied image)
         if (!kernelPath.isNullOrBlank()) {
-            val kernelFd = extractFd(bootResources?.kernelResource, kernelPath)
-            if (kernelFd != null) {
-                val set = nextFdSet++
-                args.addAll(listOf("-add-fd", "fd=$kernelFd,set=$set"))
-                args.addAll(listOf("-kernel", "/dev/fdset/$set"))
-            } else {
-                args.addAll(listOf("-kernel", kernelPath))
-            }
+            args.addAll(listOf("-kernel", kernelPath))
         }
 
-        // 2. Initrd argument (with -add-fd if SAF-backed)
+        // 2. Initrd argument (always a direct file path to copied image in app-private storage)
         // ONLY from custom path, resolved boot resource, or instance.initrdUri.
         val resolvedInitrd = customInitrdPath
             ?: bootResources?.initrdResource?.path
             ?: instance.initrdUri
 
         if (!resolvedInitrd.isNullOrBlank()) {
-            val initrdFd = extractFd(bootResources?.initrdResource, resolvedInitrd)
-            if (initrdFd != null) {
-                val set = nextFdSet++
-                args.addAll(listOf("-add-fd", "fd=$initrdFd,set=$set"))
-                args.addAll(listOf("-initrd", "/dev/fdset/$set"))
-            } else {
-                args.addAll(listOf("-initrd", resolvedInitrd))
-            }
+            args.addAll(listOf("-initrd", resolvedInitrd))
         }
 
         // 3. Disk image argument (with -add-fd if SAF-backed)

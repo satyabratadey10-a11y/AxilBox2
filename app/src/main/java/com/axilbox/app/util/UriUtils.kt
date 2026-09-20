@@ -5,7 +5,10 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.security.DigestInputStream
+import java.security.MessageDigest
 import kotlin.math.abs
 
 /**
@@ -169,5 +172,108 @@ object UriUtils {
             Log.e(TAG, "[Fallback copyUriToCache] Failed to copy URI $uri to cache: ${e.message}", e)
             null
         }
+    }
+
+    /**
+     * Copies a SAF or file URI to app-private storage (context.filesDir/boot_media),
+     * skipping the copy on subsequent boots if a content-hash-matched copy already exists in filesDir.
+     * Returns the persistent File in app-private storage.
+     */
+    fun copyUriToFilesDirWithHash(
+        context: Context,
+        uriString: String?,
+        prefix: String = "boot_asset"
+    ): File? {
+        if (uriString.isNullOrBlank()) return null
+
+        val filesDir = context.filesDir ?: return null
+        val targetDir = File(filesDir, "boot_media").apply { mkdirs() }
+        val hashKey = abs(uriString.hashCode())
+        val targetFile = File(targetDir, "${prefix}_$hashKey.bin")
+        val hashFile = File(targetDir, "${prefix}_$hashKey.sha256")
+
+        try {
+            // Check if source is an existing readable local file already in filesDir
+            if (uriString.startsWith("/") && !uriString.startsWith("/proc/")) {
+                val directFile = File(uriString)
+                if (directFile.exists() && directFile.canRead()) {
+                    if (directFile.canonicalPath.startsWith(filesDir.canonicalPath)) {
+                        return directFile
+                    }
+                }
+            }
+
+            // Open input stream from content resolver or filesystem
+            val inputStream = when {
+                uriString.startsWith("/") && !uriString.startsWith("/proc/") -> {
+                    val directFile = File(uriString)
+                    if (directFile.exists() && directFile.canRead()) {
+                        FileInputStream(directFile)
+                    } else null
+                }
+                else -> {
+                    val uri = try { Uri.parse(uriString) } catch (_: Exception) { null }
+                    if (uri != null) context.contentResolver.openInputStream(uri) else null
+                }
+            } ?: return null
+
+            val tempFile = File(targetDir, "${prefix}_${hashKey}.tmp")
+            val digest = MessageDigest.getInstance("SHA-256")
+
+            val sourceHash = inputStream.use { src ->
+                DigestInputStream(src, digest).use { dis ->
+                    FileOutputStream(tempFile).use { fos ->
+                        dis.copyTo(fos)
+                    }
+                }
+                digest.digest().joinToString("") { "%02x".format(it) }
+            }
+
+            val existingHash = if (hashFile.exists()) hashFile.readText().trim() else ""
+            if (targetFile.exists() && existingHash == sourceHash && targetFile.length() == tempFile.length()) {
+                // Content-hash matched! Skip re-copying, reuse existing target file
+                tempFile.delete()
+                Log.i(TAG, "[$prefix] Content-hash matched ($sourceHash). Reusing existing ${targetFile.absolutePath}")
+                return targetFile
+            }
+
+            // New file or modified content: replace targetFile and update hash
+            if (targetFile.exists()) targetFile.delete()
+            if (!tempFile.renameTo(targetFile)) {
+                tempFile.copyTo(targetFile, overwrite = true)
+                tempFile.delete()
+            }
+            hashFile.writeText(sourceHash)
+            Log.i(TAG, "[$prefix] Copied $uriString to ${targetFile.absolutePath} (SHA-256: $sourceHash, size: ${targetFile.length()} bytes)")
+            return targetFile
+        } catch (e: Exception) {
+            Log.e(TAG, "[$prefix] Failed to copy URI $uriString to filesDir: ${e.message}", e)
+            return null
+        }
+    }
+
+    /**
+     * Resolves a boot resource specifically via copy-to-files-dir with content-hash matching,
+     * ensuring that QEMU ROM/kernel/initrd loaders receive a standard, plain filesystem path
+     * that can be opened via libc open() without SELinux or /dev/fdset failure.
+     */
+    fun resolveBootResourceViaCopy(
+        context: Context,
+        uriString: String?,
+        prefix: String = "boot_asset"
+    ): ResolvedBootResource? {
+        if (uriString.isNullOrBlank()) return null
+
+        val copiedFile = copyUriToFilesDirWithHash(context, uriString, prefix)
+        if (copiedFile != null && copiedFile.exists() && copiedFile.length() > 0) {
+            return ResolvedBootResource(
+                path = copiedFile.absolutePath,
+                pfd = null,
+                isDirectFd = false,
+                isFallbackCopy = true,
+                isReadOnly = true
+            )
+        }
+        return null
     }
 }

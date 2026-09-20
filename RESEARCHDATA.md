@@ -533,6 +533,26 @@ The diagnostic probes prove that `-add-fd` and `/dev/fdset/` are 100% operationa
    When `-initrd /dev/fdset/0` or `-kernel /dev/fdset/0` is passed, `hw/arm/boot.c` calls `load_ramdisk()` or `load_image_targphys()`, which invokes `hw/core/loader.c:rom_add_file()`. In `rom_add_file()`, QEMU uses the standard C library function `open(rom->path, O_RDONLY | O_BINARY)`.
 3. **The Kernel VFS Reality:**
    Because `rom_add_file()` calls standard `open()`, the Linux kernel VFS looks for a directory named `/dev/fdset` on the physical/tmpfs filesystem. On Linux and Android, no `/dev/fdset` directory exists (Linux provides `/proc/self/fd/`, whereas `/dev/fd/` or `/dev/fdset/` were historically BSD/Solaris/QEMU-virtual conventions). The kernel therefore returns `ENOENT (No such file or directory)`.
-4. **Architectural Rule for SAF Descriptors in AxilBox2:**
-   - **Disk Images (`-drive`):** Must use `-add-fd fd=<N>,set=<S>` and `-drive file=/dev/fdset/<S>,if=virtio,format=raw[,readonly=on]` to bypass Android SELinux `open()` denial on `/proc/self/fd/<N>`.
-   - **Kernel & Initramfs Images (`-kernel`, `-initrd`):** Cannot use `/dev/fdset/<S>` because QEMU's ROM loader uses libc `open()`. They must either use `/proc/self/fd/<N>` directly (where Android's SELinux policy permits read access to the app's own procfs file descriptors when `FD_CLOEXEC` is cleared), or use the cached file copy from `copyUriToCache` fallback.
+
+#### 4. Architecture Decision: Subsystem Split for SAF Boot Media
+
+Based on the definitive isolation of QEMU's internal subsystems, AxilBox2 enforces an architectural split across guest boot media types:
+
+| Subsystem | Target CLI Arg | Loading Mechanism | QEMU Implementation | Android Strategy in AxilBox2 |
+| :--- | :--- | :--- | :--- | :--- |
+| **Block Device** | `-drive file=/dev/fdset/<set>...` | Virtual fdset intercept | `qemu/util/osdep.c:qemu_open_internal` intercepts `/dev/fdset/` and calls `fcntl(F_DUPFD_CLOEXEC)` | **Direct FD Passthrough (`-add-fd`)**: Zero-copy descriptor mapping directly from SAF `ParcelFileDescriptor`. Never copied to disk (images can be tens of gigabytes). Writable or readonly mode enforced via `,readonly=on`. |
+| **ROM / Loader** | `-kernel <path>`, `-initrd <path>` | Standard libc `open()` | `hw/core/loader.c:rom_add_file` directly calls libc `open(rom->path, O_RDONLY)` | **Copy-to-App-Private-Storage (`filesDir/boot_media/`)**: Copied to app-private storage with SHA-256 content-hash caching. Plain filesystem paths passed directly to `-kernel` and `-initrd`. Descriptors are **never** passed to `-add-fd` or `/dev/fdset`. |
+
+##### Implementation Details:
+1. **Direct FD Passthrough Exclusively for Disk Images:**
+   - Disk images (`imageUri`) can be tens of gigabytes. Copying them to app-private storage or memory is prohibitive on mobile devices.
+   - The block layer's `/dev/fdset/` virtual path is intercepted in userspace by QEMU's `osdep.c`, completely avoiding SELinux `open()` denials on `/proc/self/fd/` while preserving raw block performance.
+2. **Copy-to-Files-Dir with SHA-256 Caching for Kernel & Initramfs:**
+   - QEMU's ROM/kernel/initrd loader (`hw/core/loader.c`) has no fd-based loading mechanism at all; it passes the path directly to standard libc `open()`. Passing `/dev/fdset/` causes immediate `ENOENT`, and passing `/proc/self/fd/` triggers Android SELinux `security_file_open` denials.
+   - Kernel and initramfs files are lightweight (Alpine minirootfs is ~3.5MB, compressed kernels ~15-30MB). Copying them to `context.filesDir/boot_media/` takes under 50ms on modern UFS storage.
+   - `UriUtils.copyUriToFilesDirWithHash(context, uri, prefix)` streams the input through `DigestInputStream(SHA-256)`. It caches the SHA-256 digest in `<prefix>_<hashKey>.sha256`. On subsequent boots, if the target file exists and its content hash matches, the copy is completely skipped.
+3. **Strict QEMU Argv Contract:**
+   - In `EngineProvisioner.kt`: `-kernel` and `-initrd` receive plain, resolved filesystem paths.
+   - Only disk-image descriptors are passed to `-add-fd fd=<N>,set=<S>` and `/dev/fdset/<S>`. Kernel and initrd descriptors are never registered in fdsets.
+   - Unit tests (`EngineProvisionerTest.kt`) enforce that `-kernel` and `-initrd` arguments never contain `/dev/fdset` or `/proc/self/fd`, while disk-image arguments always do.
+

@@ -148,25 +148,22 @@ class EngineProvisionerTest {
         val fakeBootResources = InstanceBootResources(
             diskResource = ResolvedBootResource(path = "/proc/self/fd/42", isDirectFd = true),
             kernelResource = null,
-            initrdResource = ResolvedBootResource(path = "/proc/self/fd/43", isDirectFd = true)
+            initrdResource = ResolvedBootResource(path = "/data/user/0/com.axilbox.app/files/boot_media/initrd.bin")
         )
 
         val args = provisioner.buildQemuArgs(instance, bootResources = fakeBootResources)
 
-        // Verifies -add-fd and /dev/fdset are emitted instead of /proc/self/fd
-        assertTrue(args.contains("-add-fd"))
-        val addFdIndices = args.mapIndexedNotNull { index, elem -> if (elem == "-add-fd") index else null }
-        assertEquals(2, addFdIndices.size)
-
-        // Initrd is processed first (set=0)
-        assertEquals("fd=43,set=0", args[addFdIndices[0] + 1])
+        // Initrd uses direct copied file path, never /dev/fdset
         val iIndex = args.indexOf("-initrd")
-        assertEquals("/dev/fdset/0", args[iIndex + 1])
+        assertEquals("/data/user/0/com.axilbox.app/files/boot_media/initrd.bin", args[iIndex + 1])
+        assertFalse(args[iIndex + 1].contains("/dev/fdset"))
 
-        // Disk image is processed next (set=1)
-        assertEquals("fd=42,set=1", args[addFdIndices[1] + 1])
+        // Disk image uses -add-fd and /dev/fdset (set=0)
+        assertTrue(args.contains("-add-fd"))
+        val addFdIndex = args.indexOf("-add-fd")
+        assertEquals("fd=42,set=0", args[addFdIndex + 1])
         val dIndex = args.indexOf("-drive")
-        assertEquals("file=/dev/fdset/1,if=virtio,format=raw", args[dIndex + 1])
+        assertEquals("file=/dev/fdset/0,if=virtio,format=raw", args[dIndex + 1])
 
         // Direct /proc/self/fd must NOT appear in QEMU file arguments
         assertFalse(args.any { it.contains("file=/proc/self/fd") })
@@ -242,10 +239,10 @@ class EngineProvisionerTest {
     }
 
     @Test
-    fun buildQemuArgs_allSafResources_strictlySatisfyFdSetInvariants() {
+    fun buildQemuArgs_allResources_strictlySatisfyInvariants() {
         val instance = VirtualInstance(
             id = 7L,
-            name = "AllSafInstance",
+            name = "AllResourcesInstance",
             osType = OsType.DEBIAN_ARM64,
             ramMb = 2048,
             vCpuCount = 2,
@@ -253,27 +250,32 @@ class EngineProvisionerTest {
             initrdUri = "content://saf/alpine.cpio.gz",
             imageUri = "content://saf/rootfs.img"
         )
-        val allSafResources = InstanceBootResources(
-            kernelResource = ResolvedBootResource(path = "/proc/self/fd/101", isDirectFd = true),
-            initrdResource = ResolvedBootResource(path = "/proc/self/fd/102", isDirectFd = true),
+        val allResources = InstanceBootResources(
+            kernelResource = ResolvedBootResource(path = "/data/user/0/com.axilbox.app/files/boot_media/kernel.bin"),
+            initrdResource = ResolvedBootResource(path = "/data/user/0/com.axilbox.app/files/boot_media/initrd.bin"),
             diskResource = ResolvedBootResource(path = "/proc/self/fd/103", isDirectFd = true, isReadOnly = true)
         )
-        val args = provisioner.buildQemuArgs(instance, bootResources = allSafResources)
+        val args = provisioner.buildQemuArgs(instance, bootResources = allResources)
 
-        // Verify invariant helper with all boot resources
-        assertFdSetInvariants(args, allSafResources)
+        // Verify invariant helper with boot resources
+        assertFdSetInvariants(args, allResources)
 
-        // Verify distinct sets: kernel=0, initrd=1, disk=2
+        // Kernel & initrd are direct paths (never /dev/fdset)
         val kIndex = args.indexOf("-kernel")
-        assertEquals("/dev/fdset/0", args[kIndex + 1])
+        assertEquals("/data/user/0/com.axilbox.app/files/boot_media/kernel.bin", args[kIndex + 1])
+        assertFalse(args[kIndex + 1].contains("/dev/fdset"))
+
         val iIndex = args.indexOf("-initrd")
-        assertEquals("/dev/fdset/1", args[iIndex + 1])
+        assertEquals("/data/user/0/com.axilbox.app/files/boot_media/initrd.bin", args[iIndex + 1])
+        assertFalse(args[iIndex + 1].contains("/dev/fdset"))
+
+        // Disk image uses -add-fd and set=0
         val dIndex = args.indexOf("-drive")
-        assertEquals("file=/dev/fdset/2,if=virtio,format=raw,readonly=on", args[dIndex + 1])
+        assertEquals("file=/dev/fdset/0,if=virtio,format=raw,readonly=on", args[dIndex + 1])
     }
 
     @Test
-    fun buildQemuArgs_singleSafInitrdWithBundledKernel_strictlySatisfiesFdSetInvariants() {
+    fun buildQemuArgs_singleInitrdWithBundledKernel_usesDirectPath() {
         val instance = VirtualInstance(
             id = 8L,
             name = "AlpineInitrdInstance",
@@ -282,31 +284,81 @@ class EngineProvisionerTest {
             vCpuCount = 1,
             initrdUri = "content://saf/alpine-minirootfs.cpio.gz"
         )
-        val mockPfd125: android.os.ParcelFileDescriptor = io.mockk.mockk(relaxed = true)
-        io.mockk.every { mockPfd125.fd } returns 125
 
         val initrdOnlyResource = InstanceBootResources(
             kernelResource = null, // uses bundled kernel
-            initrdResource = ResolvedBootResource(path = "/proc/self/fd/125", pfd = mockPfd125, isDirectFd = true, isReadOnly = true),
+            initrdResource = ResolvedBootResource(path = "/data/user/0/com.axilbox.app/files/boot_media/alpine-minirootfs.cpio.gz"),
             diskResource = null
         )
         val args = provisioner.buildQemuArgs(instance, bootResources = initrdOnlyResource)
-
-        // Verify invariant helper with boot resources
-        assertFdSetInvariants(args, initrdOnlyResource)
 
         // Kernel must be bundled local path (no /dev/fdset)
         val kIndex = args.indexOf("-kernel")
         assertFalse(args[kIndex + 1].contains("/dev/fdset"))
 
-        // Initrd must be set=0
+        // Initrd must be direct path (no /dev/fdset)
         val iIndex = args.indexOf("-initrd")
-        assertEquals("/dev/fdset/0", args[iIndex + 1])
+        assertEquals("/data/user/0/com.axilbox.app/files/boot_media/alpine-minirootfs.cpio.gz", args[iIndex + 1])
+        assertFalse(args[iIndex + 1].contains("/dev/fdset"))
 
+        // No -add-fd in args
+        assertFalse(args.contains("-add-fd"))
+    }
+
+    @Test
+    fun buildQemuArgs_kernelAndInitrdNeverContainDevFdsetOrProcSelfFd_whileDiskImageDoes() {
+        val instance = VirtualInstance(
+            id = 10L,
+            name = "MixedBootInstance",
+            osType = OsType.LINUX_GENERIC,
+            ramMb = 2048,
+            vCpuCount = 2,
+            kernelUri = "content://saf/kernel/Image",
+            initrdUri = "content://saf/initramfs.cpio.gz",
+            imageUri = "content://saf/disk.raw"
+        )
+
+        val mockDiskPfd: android.os.ParcelFileDescriptor = io.mockk.mockk(relaxed = true)
+        io.mockk.every { mockDiskPfd.fd } returns 55
+
+        val bootResources = InstanceBootResources(
+            kernelResource = ResolvedBootResource(path = "/data/user/0/com.axilbox.app/files/boot_media/kernel_1.bin"),
+            initrdResource = ResolvedBootResource(path = "/data/user/0/com.axilbox.app/files/boot_media/initrd_2.bin"),
+            diskResource = ResolvedBootResource(path = "/proc/self/fd/55", pfd = mockDiskPfd, isDirectFd = true, isReadOnly = true)
+        )
+
+        val args = provisioner.buildQemuArgs(instance, bootResources = bootResources)
+
+        // 1. Kernel check: must be a direct file path, never /dev/fdset or /proc/self/fd
+        val kIndex = args.indexOf("-kernel")
+        assertTrue("-kernel must be present in args", kIndex >= 0)
+        val kernelArg = args[kIndex + 1]
+        assertEquals("/data/user/0/com.axilbox.app/files/boot_media/kernel_1.bin", kernelArg)
+        assertFalse("-kernel argument must not contain /dev/fdset", kernelArg.contains("/dev/fdset"))
+        assertFalse("-kernel argument must not contain /proc/self/fd", kernelArg.contains("/proc/self/fd"))
+
+        // 2. Initrd check: must be a direct file path, never /dev/fdset or /proc/self/fd
+        val iIndex = args.indexOf("-initrd")
+        assertTrue("-initrd must be present in args", iIndex >= 0)
+        val initrdArg = args[iIndex + 1]
+        assertEquals("/data/user/0/com.axilbox.app/files/boot_media/initrd_2.bin", initrdArg)
+        assertFalse("-initrd argument must not contain /dev/fdset", initrdArg.contains("/dev/fdset"))
+        assertFalse("-initrd argument must not contain /proc/self/fd", initrdArg.contains("/proc/self/fd"))
+
+        // 3. Disk image check: MUST use -add-fd and /dev/fdset
         val addFdIndex = args.indexOf("-add-fd")
-        assertTrue("Expected -add-fd in args", addFdIndex >= 0)
-        assertEquals("fd=125,set=0", args[addFdIndex + 1])
-        assertTrue("Expected -add-fd to precede -initrd", addFdIndex < iIndex)
+        assertTrue("-add-fd must be present for disk image", addFdIndex >= 0)
+        assertEquals("fd=55,set=0", args[addFdIndex + 1])
+
+        val dIndex = args.indexOf("-drive")
+        assertTrue("-drive must be present for disk image", dIndex >= 0)
+        val driveArg = args[dIndex + 1]
+        assertTrue("Disk image must use /dev/fdset/0", driveArg.contains("file=/dev/fdset/0"))
+        assertTrue("Disk image must preserve readonly=on flag", driveArg.contains("readonly=on"))
+
+        // Confirm only exactly ONE -add-fd exists (for the disk), not for kernel or initrd
+        val addFdCount = args.count { it == "-add-fd" }
+        assertEquals(1, addFdCount)
     }
 
     @Test(expected = AssertionError::class)

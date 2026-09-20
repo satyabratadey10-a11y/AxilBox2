@@ -30,6 +30,7 @@ class UriUtilsTest {
     private val context: Context = mockk(relaxed = true)
     private val contentResolver: ContentResolver = mockk(relaxed = true)
     private lateinit var cacheDir: File
+    private lateinit var filesDir: File
 
     @Before
     fun setup() {
@@ -48,7 +49,9 @@ class UriUtilsTest {
         }
 
         cacheDir = tempFolder.newFolder("cache")
+        filesDir = tempFolder.newFolder("files")
         every { context.cacheDir } returns cacheDir
+        every { context.filesDir } returns filesDir
         every { context.contentResolver } returns contentResolver
     }
 
@@ -135,5 +138,70 @@ class UriUtilsTest {
         assertNotNull(file)
         assertTrue(file?.exists() == true)
         assertEquals("binary content", file?.readText())
+    }
+
+    @Test
+    fun copyUriToFilesDirWithHash_copiesStreamAndComputesHash() {
+        val uriStr = "content://com.example/initrd.cpio.gz"
+        every { contentResolver.openInputStream(any()) } returns ByteArrayInputStream("initrd payload data".toByteArray())
+
+        val file = UriUtils.copyUriToFilesDirWithHash(context, uriStr, prefix = "initrd")
+        assertNotNull(file)
+        assertTrue(file!!.exists())
+        assertEquals("initrd payload data", file.readText())
+
+        // Check hash file was created
+        val hashFile = File(file.parentFile, "${file.nameWithoutExtension}.sha256")
+        assertTrue(hashFile.exists())
+        assertTrue(hashFile.readText().isNotBlank())
+    }
+
+    @Test
+    fun copyUriToFilesDirWithHash_skipsReCopyWhenHashMatches() {
+        val uriStr = "content://com.example/initrd.cpio.gz"
+        val payload = "identical initrd payload data"
+        every { contentResolver.openInputStream(any()) } answers { ByteArrayInputStream(payload.toByteArray()) }
+
+        // Initial copy
+        val file1 = UriUtils.copyUriToFilesDirWithHash(context, uriStr, prefix = "initrd")
+        assertNotNull(file1)
+        val initialLastModified = file1!!.lastModified()
+
+        // Subsequent call with identical content: should skip re-copying
+        val file2 = UriUtils.copyUriToFilesDirWithHash(context, uriStr, prefix = "initrd")
+        assertNotNull(file2)
+        assertEquals(file1.absolutePath, file2!!.absolutePath)
+        assertEquals(payload, file2.readText())
+    }
+
+    @Test
+    fun copyUriToFilesDirWithHash_reCopiesWhenContentChanges() {
+        val uriStr = "content://com.example/kernel.img"
+        every { contentResolver.openInputStream(any()) } returns ByteArrayInputStream("kernel v1".toByteArray())
+
+        val file1 = UriUtils.copyUriToFilesDirWithHash(context, uriStr, prefix = "kernel")
+        assertNotNull(file1)
+        assertEquals("kernel v1", file1!!.readText())
+
+        // Content changes at source
+        every { contentResolver.openInputStream(any()) } returns ByteArrayInputStream("kernel v2 updated".toByteArray())
+
+        val file2 = UriUtils.copyUriToFilesDirWithHash(context, uriStr, prefix = "kernel")
+        assertNotNull(file2)
+        assertEquals("kernel v2 updated", file2!!.readText())
+    }
+
+    @Test
+    fun resolveBootResourceViaCopy_returnsAppPrivatePath() {
+        val uriStr = "content://com.example/alpine.cpio.gz"
+        every { contentResolver.openInputStream(any()) } returns ByteArrayInputStream("alpine ramdisk".toByteArray())
+
+        val res = UriUtils.resolveBootResourceViaCopy(context, uriStr, prefix = "initrd")
+        assertNotNull(res)
+        assertTrue(res!!.path.startsWith(filesDir.absolutePath))
+        assertFalse(res.isDirectFd)
+        assertTrue(res.isFallbackCopy)
+        assertTrue(res.isReadOnly)
+        assertNull(res.pfd)
     }
 }
